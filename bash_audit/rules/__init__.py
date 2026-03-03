@@ -54,6 +54,7 @@ def _load_builtin_rules() -> None:
     from bash_audit.rules import destructive       # noqa: F401
     from bash_audit.rules import package_install   # noqa: F401
     from bash_audit.rules import git_scope         # noqa: F401
+    from bash_audit.rules import protected_paths   # noqa: F401
 
 
 _load_builtin_rules()
