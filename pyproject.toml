@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bash-audit"
+version = "0.1.0"
+description = "Bash AST security interceptor for LLM sandboxing"
+requires-python = ">=3.11"
+dependencies = [
+    "tree-sitter>=0.24",
+    "tree-sitter-bash>=0.23",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+bash-audit = "bash_audit.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bash_ast", "bash_audit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
