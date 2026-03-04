@@ -152,6 +152,87 @@ class TestEscalation:
         assert verdict.message
 
 
+class TestRedirectPayload:
+    """Story: prompt executor needs redirect_tool/args/resolved to call safe tools directly."""
+
+    def _finding_with_meta(self, rule_id: str, metadata: dict) -> Finding:
+        return Finding(
+            rule_id=rule_id,
+            severity=Severity.LOW,
+            message="redirect test",
+            matched_text="test cmd",
+            metadata=metadata,
+        )
+
+    def test_fully_resolved_when_all_template_vars_in_metadata(self, ctx):
+        config = PolicyConfig(rule_overrides=[
+            RulePolicy(
+                rule_id="cat.file",
+                verdict=VerdictType.REDIRECT,
+                redirect_tool="read_file",
+                redirect_args_template={"path": "{path}"},
+            )
+        ])
+        finding = self._finding_with_meta("cat.file", {"path": "README.md"})
+        verdict = decide([finding], ctx, config)
+        assert verdict.verdict == VerdictType.REDIRECT
+        assert verdict.redirect_tool == "read_file"
+        assert verdict.redirect_args == {"path": "README.md"}
+        assert verdict.redirect_resolved is True
+
+    def test_unresolved_when_template_var_missing_from_metadata(self, ctx):
+        config = PolicyConfig(rule_overrides=[
+            RulePolicy(
+                rule_id="cat.file",
+                verdict=VerdictType.REDIRECT,
+                redirect_tool="read_file",
+                redirect_args_template={"path": "{path}"},
+            )
+        ])
+        finding = self._finding_with_meta("cat.file", {})  # no path in metadata
+        verdict = decide([finding], ctx, config)
+        assert verdict.redirect_tool == "read_file"
+        assert verdict.redirect_args == {"path": None}
+        assert verdict.redirect_resolved is False
+
+    def test_no_args_template_is_always_resolved(self, ctx):
+        config = PolicyConfig(rule_overrides=[
+            RulePolicy(
+                rule_id="git.status",
+                verdict=VerdictType.REDIRECT,
+                redirect_tool="git_status",
+                redirect_args_template={},
+            )
+        ])
+        finding = self._finding_with_meta("git.status", {})
+        verdict = decide([finding], ctx, config)
+        assert verdict.redirect_tool == "git_status"
+        assert verdict.redirect_args == {}
+        assert verdict.redirect_resolved is True
+
+    def test_literal_arg_values_are_always_resolved(self, ctx):
+        config = PolicyConfig(rule_overrides=[
+            RulePolicy(
+                rule_id="git.log",
+                verdict=VerdictType.REDIRECT,
+                redirect_tool="git_log",
+                redirect_args_template={"n": 10},  # literal int default
+            )
+        ])
+        finding = self._finding_with_meta("git.log", {})
+        verdict = decide([finding], ctx, config)
+        assert verdict.redirect_args == {"n": 10}
+        assert verdict.redirect_resolved is True
+
+    def test_redirect_tool_none_when_verdict_not_redirect(self, ctx, default_config):
+        findings = [_finding("some.rule", Severity.CRITICAL)]
+        verdict = decide(findings, ctx, default_config)
+        assert verdict.verdict == VerdictType.BLOCK
+        assert verdict.redirect_tool is None
+        assert verdict.redirect_args is None
+        assert verdict.redirect_resolved is False
+
+
 class TestPolicyConfigLoad:
     def test_default_config_is_valid(self):
         config = PolicyConfig.default()

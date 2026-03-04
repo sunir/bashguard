@@ -67,3 +67,9 @@ class Verdict:
     message: str
     redirect_command: str | None = None
     confirmation_prompt: str | None = None
+    # Structured redirect payload (Prolog unification model):
+    #   resolved=True  → all args bound, call tool directly (no LLM round-trip)
+    #   resolved=False → free variables present, surface to LLM to fill in
+    redirect_tool: str | None = None
+    redirect_args: dict | None = None
+    redirect_resolved: bool = False
