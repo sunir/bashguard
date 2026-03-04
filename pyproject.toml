@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "tree-sitter>=0.24",
     "tree-sitter-bash>=0.23",
+    "data-grammar>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,7 @@ dev = [
 
 [project.scripts]
 bash-audit = "bash_audit.cli:main"
+bash-ast = "bash_ast.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["bash_ast", "bash_audit"]

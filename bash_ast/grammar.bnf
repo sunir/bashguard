@@ -1,0 +1,44 @@
+# bash-ast grammar — security interceptor for LLM bash commands
+#
+# Forth-style pipeline:
+#   hook mode:    [stdin JSON] hook          → Entry.hook_mode()       → Output
+#   analyze mode: analyze (--command | --file) → AnalyzeScript.audit*() → Output
+#
+# Key constraint: every pipeline step must consume a token or it won't fire.
+# Tokenless method chains are collapsed into a single method call.
+
+@import("stdlib.bnf", "stdlib")
+
+@start = Entry @help({
+  "tool": "bash-ast",
+  "description": "Bash command security auditor for LLM agent sandboxing",
+  "usage": "echo $HOOK_JSON | bash-ast hook  |  bash-ast analyze (--command CMD | --file PATH)",
+  "examples": [
+    "echo \"$CLAUDE_HOOK_INPUT\" | bash-ast hook",
+    "bash-ast analyze --command 'git push origin main'",
+    "bash-ast analyze --file script.sh"
+  ]
+}) ;
+
+@end = @eof @output ;
+
+Entry = "hook" @required :hook_mode > Output
+        @help({
+          "description": "Read Claude PreToolUse JSON from stdin, emit gates-compatible response",
+          "examples": ["echo \"$CLAUDE_HOOK_INPUT\" | bash-ast hook"]
+        })
+      | "analyze" @required :new > AnalyzeScript
+        @help({
+          "description": "Analyze a bash command or script file and output a JSON audit report",
+          "examples": [
+            "bash-ast analyze --command 'git push origin main'",
+            "bash-ast analyze --file script.sh"
+          ]
+        })
+      ;
+
+AnalyzeScript = ("--command" | "-c") &cmd<TEXT> :analyze_command > Output
+              | "--file" &path<TEXT> :analyze_file > Output
+              ;
+
+Output = @end ;
