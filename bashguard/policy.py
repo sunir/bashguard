@@ -1,5 +1,5 @@
 """
-bash_audit.policy — Map findings to verdicts.
+bashguard.policy — Map findings to verdicts.
 
 This is a pure function: same inputs, same output. No side effects.
 Detection (rules → findings) is orthogonal to response (findings → verdict).
@@ -8,7 +8,7 @@ The same finding produces different verdicts in different PolicyConfig contexts.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from bash_audit.models import Finding, ExecutionContext, Verdict, VerdictType, Severity
+from bashguard.models import Finding, ExecutionContext, Verdict, VerdictType, Severity
 
 _ESCALATION_ORDER = {
     VerdictType.ALLOW: 0,

@@ -1,5 +1,5 @@
 """
-bash_audit.auditor — Apply security rules to a bash script.
+bashguard.auditor — Apply security rules to a bash script.
 
 Takes a script string and ExecutionContext. Returns all Findings from all
 registered rules, sorted by severity (highest first).
@@ -10,8 +10,8 @@ Silent bypass is worse than noisy crash.
 
 from __future__ import annotations
 import logging
-from bash_audit.models import Finding, ExecutionContext, Severity
-from bash_audit.rules import all_rules, Rule
+from bashguard.models import Finding, ExecutionContext, Severity
+from bashguard.rules import all_rules, Rule
 
 _log = logging.getLogger(__name__)
 

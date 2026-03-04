@@ -14,10 +14,10 @@ import os
 import pytest
 import yaml
 
-from bash_audit.auditor import audit
-from bash_audit.context import make_context
-from bash_audit.models import VerdictType, ExecutionContext
-from bash_audit.policy import PolicyConfig, decide
+from bashguard.auditor import audit
+from bashguard.context import make_context
+from bashguard.models import VerdictType, ExecutionContext
+from bashguard.policy import PolicyConfig, decide
 
 _CORPUS_PATH = os.path.join(os.path.dirname(__file__), "corpus.yaml")
 

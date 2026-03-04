@@ -1,5 +1,5 @@
 """
-bash_audit.models — All data models for the security audit pipeline.
+bashguard.models — All data models for the security audit pipeline.
 
 All models are frozen dataclasses: immutable values, not mutable objects.
 No rule can modify a Finding after creation. Audit correctness is enforced

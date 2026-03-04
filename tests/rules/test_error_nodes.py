@@ -10,9 +10,9 @@ Success:
 """
 
 import pytest
-from bash_audit.models import Severity
-from bash_audit.rules.error_nodes import ErrorNodesRule
-from bash_audit.context import make_context
+from bashguard.models import Severity
+from bashguard.rules.error_nodes import ErrorNodesRule
+from bashguard.context import make_context
 
 
 @pytest.fixture

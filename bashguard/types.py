@@ -1,5 +1,5 @@
 """
-bash_ast.types — Data-grammar type implementations for the bash-ast CLI.
+bashguard.types — Data-grammar type implementations for the bash-ast CLI.
 
 Forth-style pipeline (each method consumes a token and produces Output):
   hook:    "hook" → Entry.hook_mode()              → Output
@@ -18,10 +18,10 @@ import sys
 
 from data_grammar import Document, Output as BaseOutput
 
-from bash_audit.auditor import audit as _audit
-from bash_audit.context import make_context
-from bash_audit.models import VerdictType
-from bash_audit.policy import PolicyConfig, decide
+from bashguard.auditor import audit as _audit
+from bashguard.context import make_context
+from bashguard.models import VerdictType
+from bashguard.policy import PolicyConfig, decide
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

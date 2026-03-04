@@ -1,5 +1,5 @@
 """
-bash_audit.rules.error_nodes — Flag commands with parse errors.
+bashguard.rules.error_nodes — Flag commands with parse errors.
 
 A command that cannot be fully parsed is a command we cannot fully audit.
 Treat it as elevated risk. LLMs sometimes generate malformed commands
@@ -11,8 +11,8 @@ import logging
 from tree_sitter import Language, Parser
 import tree_sitter_bash as tsb
 
-from bash_audit.models import Severity, Finding, ExecutionContext
-from bash_audit.rules import register
+from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
 

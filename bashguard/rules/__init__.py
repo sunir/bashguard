@@ -1,5 +1,5 @@
 """
-bash_audit.rules — Rule Protocol and registry.
+bashguard.rules — Rule Protocol and registry.
 
 A Rule is any object satisfying the Rule protocol:
   - rule_id: str
@@ -13,7 +13,7 @@ to populate the registry; import individual rule modules to register them.
 
 from __future__ import annotations
 from typing import Protocol, runtime_checkable
-from bash_audit.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext
 
 
 @runtime_checkable
@@ -48,14 +48,14 @@ def get_rule(rule_id: str) -> Rule | None:
 
 def _load_builtin_rules() -> None:
     """Import all built-in rule modules so they self-register."""
-    from bash_audit.rules import error_nodes       # noqa: F401
-    from bash_audit.rules import credentials       # noqa: F401
-    from bash_audit.rules import network           # noqa: F401
-    from bash_audit.rules import destructive       # noqa: F401
-    from bash_audit.rules import package_install   # noqa: F401
-    from bash_audit.rules import git_scope         # noqa: F401
-    from bash_audit.rules import protected_paths   # noqa: F401
-    from bash_audit.rules import evasion           # noqa: F401
+    from bashguard.rules import error_nodes       # noqa: F401
+    from bashguard.rules import credentials       # noqa: F401
+    from bashguard.rules import network           # noqa: F401
+    from bashguard.rules import destructive       # noqa: F401
+    from bashguard.rules import package_install   # noqa: F401
+    from bashguard.rules import git_scope         # noqa: F401
+    from bashguard.rules import protected_paths   # noqa: F401
+    from bashguard.rules import evasion           # noqa: F401
 
 
 _load_builtin_rules()

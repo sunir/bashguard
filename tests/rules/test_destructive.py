@@ -14,9 +14,9 @@ Success:
 """
 
 import pytest
-from bash_audit.rules.destructive import DestructiveRule
-from bash_audit.context import make_context
-from bash_audit.models import Severity
+from bashguard.rules.destructive import DestructiveRule
+from bashguard.context import make_context
+from bashguard.models import Severity
 
 
 @pytest.fixture

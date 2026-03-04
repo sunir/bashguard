@@ -1,5 +1,5 @@
 """
-bash_audit.rules.evasion — Layer 1 fail-close evasion detection.
+bashguard.rules.evasion — Layer 1 fail-close evasion detection.
 
 Principle: if the command's intent cannot be read directly from the AST, block it.
 Structural ambiguity is itself the signal.
@@ -14,9 +14,9 @@ import logging
 import tree_sitter_bash as tsb
 from tree_sitter import Language, Parser as TSParser
 
-from bash_ast.parser import parse
-from bash_audit.models import Severity, Finding, ExecutionContext
-from bash_audit.rules import register
+from bashguard.parser import parse
+from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
 _LANG = Language(tsb.language())

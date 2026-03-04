@@ -16,9 +16,9 @@ Success:
 """
 
 import pytest
-from bash_ast.parser import parse
-from bash_ast.policies import FileWritePolicy, GitPolicy, DangerousCommandPolicy
-from bash_ast.policies import compose, Violation
+from bashguard.parser import parse
+from bashguard.policies import FileWritePolicy, GitPolicy, DangerousCommandPolicy
+from bashguard.policies import compose, Violation
 
 
 class TestFileWritePolicy:

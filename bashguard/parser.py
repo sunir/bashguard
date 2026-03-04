@@ -1,5 +1,5 @@
 """
-bash_ast.parser — Parse bash scripts into CommandNode lists via tree-sitter.
+bashguard.parser — Parse bash scripts into CommandNode lists via tree-sitter.
 
 Each CommandNode captures: name, flags, args, redirect_targets, raw text.
 All commands in a script are extracted, including those in pipelines,

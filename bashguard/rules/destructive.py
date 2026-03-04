@@ -1,5 +1,5 @@
 """
-bash_audit.rules.destructive — Flag irreversible filesystem destruction.
+bashguard.rules.destructive — Flag irreversible filesystem destruction.
 
 Detects:
 - rm -rf on non-/tmp paths
@@ -13,9 +13,9 @@ Detects:
 from __future__ import annotations
 import logging
 
-from bash_ast.parser import parse
-from bash_audit.models import Severity, Finding, ExecutionContext
-from bash_audit.rules import register
+from bashguard.parser import parse
+from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
 

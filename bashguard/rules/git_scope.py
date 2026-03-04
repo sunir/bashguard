@@ -1,5 +1,5 @@
 """
-bash_audit.rules.git_scope — Flag destructive git operations.
+bashguard.rules.git_scope — Flag destructive git operations.
 
 Detects:
 - git push --force / -f (history rewrite on remote)
@@ -15,9 +15,9 @@ Safe operations (read-only or reversible) are not flagged:
 from __future__ import annotations
 import logging
 
-from bash_ast.parser import parse
-from bash_audit.models import Severity, Finding, ExecutionContext
-from bash_audit.rules import register
+from bashguard.parser import parse
+from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
 

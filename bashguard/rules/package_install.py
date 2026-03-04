@@ -1,5 +1,5 @@
 """
-bash_audit.rules.package_install — Flag global package manager installs.
+bashguard.rules.package_install — Flag global package manager installs.
 
 Detects system-level mutations via:
 - npm install -g / npm i -g
@@ -17,9 +17,9 @@ Does NOT flag:
 from __future__ import annotations
 import logging
 
-from bash_ast.parser import parse
-from bash_audit.models import Severity, Finding, ExecutionContext
-from bash_audit.rules import register
+from bashguard.parser import parse
+from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
 

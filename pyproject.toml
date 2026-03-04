@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "bash-audit"
+name = "bashguard"
 version = "0.1.0"
-description = "Bash AST security interceptor for LLM sandboxing"
+description = "Bash security interceptor for LLM sandboxing"
 requires-python = ">=3.11"
 dependencies = [
     "tree-sitter>=0.24",
@@ -20,11 +20,10 @@ dev = [
 ]
 
 [project.scripts]
-bash-audit = "bash_audit.cli:main"
-bash-ast = "bash_ast.cli:main"
+bashguard = "bashguard.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["bash_ast", "bash_audit"]
+packages = ["bashguard"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

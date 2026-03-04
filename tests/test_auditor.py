@@ -11,10 +11,10 @@ Success:
 """
 
 import pytest
-from bash_audit.auditor import audit
-from bash_audit.context import make_context
-from bash_audit.models import Severity, Finding
-from bash_audit.rules import Rule, register, _REGISTRY
+from bashguard.auditor import audit
+from bashguard.context import make_context
+from bashguard.models import Severity, Finding
+from bashguard.rules import Rule, register, _REGISTRY
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def test_findings_sorted_by_severity_descending(ctx):
                 )]
             return []
 
-    from bash_audit.rules import _REGISTRY as reg
+    from bashguard.rules import _REGISTRY as reg
     reg["test.low_severity"] = _LowRule()
 
     try:
@@ -70,7 +70,7 @@ def test_crashing_rule_does_not_stop_audit(ctx):
         def check(self, script, context):
             raise RuntimeError("boom")
 
-    from bash_audit.rules import _REGISTRY as reg
+    from bashguard.rules import _REGISTRY as reg
     reg["test.crash"] = _CrashRule()
 
     try:
@@ -83,7 +83,7 @@ def test_crashing_rule_does_not_stop_audit(ctx):
 
 
 def test_specific_rules_subset(ctx):
-    from bash_audit.rules.error_nodes import ErrorNodesRule
+    from bashguard.rules.error_nodes import ErrorNodesRule
     findings = audit(">&", ctx, rules=[ErrorNodesRule()])
     assert any(f.rule_id == "parse.error_node" for f in findings)
 

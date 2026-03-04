@@ -18,9 +18,9 @@ Success:
 """
 
 import pytest
-from bash_audit.rules.git_scope import GitScopeRule
-from bash_audit.context import make_context
-from bash_audit.models import Severity, ExecutionContext
+from bashguard.rules.git_scope import GitScopeRule
+from bashguard.context import make_context
+from bashguard.models import Severity, ExecutionContext
 
 
 @pytest.fixture

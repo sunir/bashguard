@@ -25,7 +25,7 @@ import sys
 import os
 
 PYTHON = sys.executable
-CLI = [PYTHON, "-m", "bash_ast.cli"]
+CLI = [PYTHON, "-m", "bashguard.cli"]
 
 
 def _hook_json(command: str) -> str:

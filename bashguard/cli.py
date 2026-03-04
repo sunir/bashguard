@@ -1,5 +1,5 @@
 """
-bash_ast.cli — bash-ast command-line interface (data-grammar).
+bashguard.cli — bash-ast command-line interface (data-grammar).
 
 Usage:
     echo "$CLAUDE_HOOK_INPUT" | bash-ast hook
@@ -20,7 +20,7 @@ from pathlib import Path
 
 from data_grammar import DataGrammar, ParseError, ExecutionError, UserError
 
-from bash_ast.types import AnalyzeScript, Entry, Output
+from bashguard.types import AnalyzeScript, Entry, Output
 
 _GRAMMAR = Path(__file__).parent / "grammar.bnf"
 

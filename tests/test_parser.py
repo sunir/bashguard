@@ -15,7 +15,7 @@ Success:
 """
 
 import pytest
-from bash_ast.parser import parse, CommandNode, ParseError
+from bashguard.parser import parse, CommandNode, ParseError
 
 
 class TestSimpleCommand:

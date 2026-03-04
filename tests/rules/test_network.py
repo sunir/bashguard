@@ -14,9 +14,9 @@ Success:
 """
 
 import pytest
-from bash_audit.rules.network import NetworkRule
-from bash_audit.context import make_context
-from bash_audit.models import Severity, ExecutionContext
+from bashguard.rules.network import NetworkRule
+from bashguard.context import make_context
+from bashguard.models import Severity, ExecutionContext
 
 
 @pytest.fixture

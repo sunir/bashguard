@@ -20,9 +20,9 @@ Success:
 """
 
 import pytest
-from bash_audit.rules.protected_paths import ProtectedPathsRule
-from bash_audit.context import make_context
-from bash_audit.models import Severity
+from bashguard.rules.protected_paths import ProtectedPathsRule
+from bashguard.context import make_context
+from bashguard.models import Severity
 
 
 @pytest.fixture

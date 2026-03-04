@@ -1,5 +1,5 @@
 """
-bash_audit.rules.credentials — Flag access to credential files and directories.
+bashguard.rules.credentials — Flag access to credential files and directories.
 
 Detects when a command references paths known to contain secrets:
 SSH keys, AWS credentials, GnuPG keys, .env files, /etc/passwd, etc.
@@ -12,9 +12,9 @@ from __future__ import annotations
 import logging
 import os
 
-from bash_ast.parser import parse
-from bash_audit.models import Severity, Finding, ExecutionContext
-from bash_audit.rules import register
+from bashguard.parser import parse
+from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
 

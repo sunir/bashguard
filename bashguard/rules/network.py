@@ -1,5 +1,5 @@
 """
-bash_audit.rules.network — Flag outbound network access to unknown hosts.
+bashguard.rules.network — Flag outbound network access to unknown hosts.
 
 1 bit of exfiltration = infinite bits of exfiltration.
 
@@ -16,9 +16,9 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from bash_ast.parser import parse, CommandNode
-from bash_audit.models import Severity, Finding, ExecutionContext
-from bash_audit.rules import register
+from bashguard.parser import parse, CommandNode
+from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
 

@@ -17,10 +17,10 @@ Success:
 """
 
 import pytest
-from bash_audit.models import (
+from bashguard.models import (
     Finding, Severity, VerdictType, ExecutionContext
 )
-from bash_audit.policy import PolicyConfig, RulePolicy, decide
+from bashguard.policy import PolicyConfig, RulePolicy, decide
 
 
 def _finding(rule_id: str, severity: Severity) -> Finding:

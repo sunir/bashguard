@@ -6,3 +6,71 @@ dist/
 .pytest_cache/
 transcripts/
 .status-pin
+
+# === COLONY MANAGED RULES ===
+# Do not edit - managed by: colony git sync
+# Last sync: 2026-03-04 09:08:32
+
+# Prohibit patterns (must ignore)
+*.backup*
+*.pyc
+*.pyo
+*.tmp
+*~
+.*.swo
+.*.swp
+.DS_Store
+.automode
+.automode-*
+.automode_gitignore
+.bugs.log
+.claude-map.json
+.claude/agents/
+.claude/hooks/*.d/system/
+.claude/worktrees/
+.colony
+.deploy.json
+.focusmode
+.focusmode-log
+.idea/
+.msg/
+.pipes/
+.project.json
+.status-pin
+.strictmode
+.todo.*
+.venv/
+.vscode/
+__pycache__/
+core/.rag-statusline
+core/.todo-statusline
+core/compressed-context.json
+issues/
+mail/cur/*
+mail/new/*
+mail/tmp/*
+node_modules/
+rag_index/
+rules/99-plan.md
+sessions/
+timelog.json
+venv/
+
+# Require patterns (must track)
+!.claude/commands/
+!.claude/hooks/
+!.claude/settings.json
+!CLAUDE.md
+!core/emoji
+!core/focus.md
+!core/identity.md
+!core/memory.md
+!mail/cur/.gitkeep
+!mail/new/.gitkeep
+!mail/tmp/.gitkeep
+!memories/
+!specs/*.md
+!stories/*.md
+!transcripts/
+
+# === END COLONY RULES ===

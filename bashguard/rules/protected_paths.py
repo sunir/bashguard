@@ -1,5 +1,5 @@
 """
-bash_audit.rules.protected_paths — Flag writes to protected system directories.
+bashguard.rules.protected_paths — Flag writes to protected system directories.
 
 Detects shell redirects (>, >>) that target OS-owned paths that an LLM
 has no business writing to: system binaries, kernel interfaces, device nodes,
@@ -8,7 +8,7 @@ bootloader config, etc.
 This is distinct from credentials.py (which catches reads of secret files).
 This rule catches WRITES to system integrity paths regardless of command.
 
-Protected prefixes mirror bash_ast.policies.FileWritePolicy:
+Protected prefixes mirror bashguard.policies.FileWritePolicy:
     /etc /usr /sys /proc /boot /bin /sbin /lib /lib64 /dev
 """
 
@@ -18,8 +18,8 @@ import logging
 import tree_sitter_bash as tsb
 from tree_sitter import Language, Parser as TSParser
 
-from bash_audit.models import Severity, Finding, ExecutionContext
-from bash_audit.rules import register
+from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
 

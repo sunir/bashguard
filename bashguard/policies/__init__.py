@@ -1,12 +1,12 @@
 """
-bash_ast.policies — built-in security policies + composition.
+bashguard.policies — built-in security policies + composition.
 
 A policy is any object with a .check(cmd: CommandNode) -> Violation | None method.
 """
 
 from __future__ import annotations
 from dataclasses import dataclass
-from bash_ast.parser import CommandNode
+from bashguard.parser import CommandNode
 
 
 @dataclass

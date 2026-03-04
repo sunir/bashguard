@@ -1,5 +1,5 @@
 """
-bash_audit.context — ExecutionContext builder.
+bashguard.context — ExecutionContext builder.
 
 Provides make_context() for constructing a context from the current
 environment. Callers can override any field.
