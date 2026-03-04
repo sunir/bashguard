@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "next_id": 66,
+    "next_id": 67,
     "schema_version": "1.2"
   },
   "todos": [
@@ -9,6 +9,12 @@
       "content": "specs",
       "status": "close",
       "id": 1
+    },
+    {
+      "type": "todo",
+      "content": "Implement evasion rules from specs/05-fail-close.md",
+      "status": "taken",
+      "id": 66
     }
   ]
 }
