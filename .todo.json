@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "next_id": 68,
+    "next_id": 18,
     "schema_version": "1.2"
   },
   "todos": [
@@ -9,6 +9,60 @@
       "content": "specs",
       "status": "close",
       "id": 1
+    },
+    {
+      "id": 2,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] pyproject.toml + deps"
+    },
+    {
+      "id": 3,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] models.py + parser.py + test_parser.py"
+    },
+    {
+      "id": 4,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] rules/__init__.py + error_nodes.py + test_error_nodes.py"
+    },
+    {
+      "id": 5,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] auditor.py + test_auditor.py"
+    },
+    {
+      "id": 6,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] policy.py + context.py + test_policy.py"
+    },
+    {
+      "id": 7,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] cli.py + test_cli.py"
+    },
+    {
+      "id": 8,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] Security rules: credentials + network + destructive + packages + git"
+    },
+    {
+      "id": 9,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] corpus.yaml + test_corpus.py"
+    },
+    {
+      "id": 10,
+      "type": "todo",
+      "status": "avail",
+      "content": "[todo][avail] Implement evasion rules from specs/05-fail-close.md"
     }
   ]
 }
