@@ -13,7 +13,7 @@ import logging
 import os
 
 from bashguard.parser import parse
-from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext, ActionType
 from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
@@ -90,6 +90,7 @@ class CredentialsRule:
                             message=f"Access to protected credential path: {clean}",
                             matched_text=cmd.raw,
                             metadata={"path": clean, "command": cmd.name},
+                            action_type=ActionType.CREDENTIAL_ACCESS,
                         ))
                         break  # one finding per command is enough
 

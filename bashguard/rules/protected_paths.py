@@ -18,7 +18,7 @@ import logging
 import tree_sitter_bash as tsb
 from tree_sitter import Language, Parser as TSParser
 
-from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext, ActionType
 from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ def _find_write_redirects(node, source: bytes, findings: list, script: str) -> N
                 message=f"Write ({operator}) to protected system path: {target.strip(chr(39) + chr(34))}",
                 matched_text=script,
                 metadata={"target": target, "operator": operator},
+                action_type=ActionType.SYSTEM_CONFIG,
             ))
     for child in node.children:
         _find_write_redirects(child, source, findings, script)

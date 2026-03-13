@@ -15,7 +15,7 @@ import tree_sitter_bash as tsb
 from tree_sitter import Language, Parser as TSParser
 
 from bashguard.parser import parse
-from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext, ActionType
 from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
@@ -95,13 +95,15 @@ def _cmd_name_text(cmd_node, source: bytes) -> str | None:
 
 
 
-def _finding(rule_id: str, message: str, script: str, **meta) -> Finding:
+def _finding(rule_id: str, message: str, script: str,
+             action_type: ActionType = ActionType.OBFUSCATED, **meta) -> Finding:
     return Finding(
         rule_id=rule_id,
         severity=Severity.CRITICAL,
         message=message,
         matched_text=script,
         metadata=meta,
+        action_type=action_type,
     )
 
 
@@ -301,7 +303,7 @@ class DangerousEnvRule:
                     return [_finding(
                         self.rule_id,
                         f"Assignment to {var_name} hijacks execution",
-                        script, variable=var_name,
+                        script, action_type=ActionType.ENV_MUTATION, variable=var_name,
                     )]
                 if var_name == "PATH":
                     val_node = va.child_by_field_name("value")
@@ -311,7 +313,7 @@ class DangerousEnvRule:
                             return [_finding(
                                 self.rule_id,
                                 "PATH prepended with /tmp (possible command hijacking)",
-                                script, variable="PATH",
+                                script, action_type=ActionType.ENV_MUTATION, variable="PATH",
                             )]
             return []
         except Exception as e:

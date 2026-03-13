@@ -55,7 +55,8 @@ def _load_builtin_rules() -> None:
     from bashguard.rules import package_install   # noqa: F401
     from bashguard.rules import git_scope         # noqa: F401
     from bashguard.rules import protected_paths   # noqa: F401
-    from bashguard.rules import evasion           # noqa: F401
+    from bashguard.rules import evasion             # noqa: F401
+    from bashguard.rules import content_inspection  # noqa: F401
 
 
 _load_builtin_rules()

@@ -26,6 +26,25 @@ class VerdictType(Enum):
     REDIRECT = "redirect"
 
 
+class ActionType(Enum):
+    """What category of action a finding represents."""
+    FILESYSTEM_READ = "filesystem_read"
+    FILESYSTEM_WRITE = "filesystem_write"
+    FILESYSTEM_DELETE = "filesystem_delete"
+    FILESYSTEM_MOVE = "filesystem_move"
+    NETWORK_OUTBOUND = "network_outbound"
+    GIT_SAFE = "git_safe"
+    GIT_DESTRUCTIVE = "git_destructive"
+    PACKAGE_INSTALL = "package_install"
+    LANG_EXEC = "lang_exec"
+    PROCESS_SIGNAL = "process_signal"
+    ENV_MUTATION = "env_mutation"
+    OBFUSCATED = "obfuscated"
+    CREDENTIAL_ACCESS = "credential_access"
+    SYSTEM_CONFIG = "system_config"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class Finding:
     """One detected issue produced by one rule.
@@ -39,6 +58,7 @@ class Finding:
     matched_text: str                 # exact text that triggered this
     span: tuple[int, int] = (0, 0)    # (start_byte, end_byte) in source
     metadata: dict = field(default_factory=dict)
+    action_type: ActionType = ActionType.UNKNOWN
 
     def __post_init__(self):
         if not self.rule_id:

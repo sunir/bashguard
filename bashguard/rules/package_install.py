@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 
 from bashguard.parser import parse
-from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext, ActionType
 from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ class PackageInstallRule:
                             message=f"System package install: {cmd.name} {subcommand}",
                             matched_text=cmd.raw,
                             metadata={"command": cmd.name, "subcommand": subcommand},
+                            action_type=ActionType.PACKAGE_INSTALL,
                         )
 
                 elif cmd.name in {"npm", "yarn", "pnpm", "bun"}:
@@ -62,6 +63,7 @@ class PackageInstallRule:
                                 message=f"Global {cmd.name} install",
                                 matched_text=cmd.raw,
                                 metadata={"command": cmd.name},
+                                action_type=ActionType.PACKAGE_INSTALL,
                             )
 
                 elif cmd.name == "pip" or cmd.name == "pip3":
@@ -74,6 +76,7 @@ class PackageInstallRule:
                                 message="pip install --break-system-packages modifies system Python",
                                 matched_text=cmd.raw,
                                 metadata={"command": cmd.name},
+                                action_type=ActionType.PACKAGE_INSTALL,
                             )
                         # pip install without venv flags is generally safe (venv assumed)
                         # Only flag explicit system-breaking patterns

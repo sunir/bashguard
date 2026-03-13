@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 from bashguard.parser import parse
-from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext, ActionType
 from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
@@ -61,6 +61,7 @@ class GitScopeRule:
                             message="git push --force rewrites remote history",
                             matched_text=cmd.raw,
                             metadata={"subcommand": "push", "flags": cmd.flags},
+                            action_type=ActionType.GIT_DESTRUCTIVE,
                         )
                     else:
                         positional = [a for a in cmd.args[1:] if not a.startswith("-")]
@@ -72,6 +73,7 @@ class GitScopeRule:
                                 message=f"git push to protected branch: {branch}",
                                 matched_text=cmd.raw,
                                 metadata={"subcommand": "push", "branch": branch},
+                                action_type=ActionType.GIT_DESTRUCTIVE,
                             )
 
                 elif subcommand == "reset":
@@ -82,6 +84,7 @@ class GitScopeRule:
                             message="git reset --hard discards uncommitted changes irreversibly",
                             matched_text=cmd.raw,
                             metadata={"subcommand": "reset"},
+                            action_type=ActionType.GIT_DESTRUCTIVE,
                         )
 
                 elif subcommand == "clean":
@@ -94,6 +97,7 @@ class GitScopeRule:
                             message="git clean -f deletes untracked files irreversibly",
                             matched_text=cmd.raw,
                             metadata={"subcommand": "clean"},
+                            action_type=ActionType.GIT_DESTRUCTIVE,
                         )
 
                 elif subcommand == "branch":
@@ -104,6 +108,7 @@ class GitScopeRule:
                             message="git branch -D force-deletes a branch",
                             matched_text=cmd.raw,
                             metadata={"subcommand": "branch"},
+                            action_type=ActionType.GIT_DESTRUCTIVE,
                         )
 
                 if finding:

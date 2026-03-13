@@ -17,7 +17,7 @@ import re
 from urllib.parse import urlparse
 
 from bashguard.parser import parse, CommandNode
-from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext, ActionType
 from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
@@ -77,6 +77,7 @@ class NetworkRule:
                             ),
                             matched_text=cmd.raw,
                             metadata={"command": cmd.name, "host": host},
+                            action_type=ActionType.NETWORK_OUTBOUND,
                         ))
                     elif host is None and cmd.name in {"nc", "ncat", "netcat"}:
                         # nc with no recognizable host — still flag it
@@ -86,6 +87,7 @@ class NetworkRule:
                             message=f"'{cmd.name}' used — potential network access",
                             matched_text=cmd.raw,
                             metadata={"command": cmd.name},
+                            action_type=ActionType.NETWORK_OUTBOUND,
                         ))
 
                 # Check redirect targets for /dev/tcp
@@ -97,6 +99,7 @@ class NetworkRule:
                             message=f"Bash /dev/tcp redirect detected: {target}",
                             matched_text=cmd.raw,
                             metadata={"target": target},
+                            action_type=ActionType.NETWORK_OUTBOUND,
                         ))
 
             return findings

@@ -35,7 +35,23 @@ Entry = "hook" @required :hook_mode > Output
             "bash-ast analyze --file script.sh"
           ]
         })
+      | "log" @required :show_log > LogQuery
+        @help({
+          "description": "Query the audit log",
+          "examples": [
+            "bashguard log",
+            "bashguard log --verdict block",
+            "bashguard log --rule network.unknown_host",
+            "bashguard log -n 20"
+          ]
+        })
       ;
+
+LogQuery = ("--verdict" | "-v") &verdict<TEXT> :filter_verdict > LogQuery
+         | ("--rule" | "-r") &rule_id<TEXT> :filter_rule > LogQuery
+         | ("-n" | "--limit") &n<TEXT> :set_limit > LogQuery
+         | "--json" :use_json > LogQuery
+         ;
 
 AnalyzeScript = ("--command" | "-c") &cmd<TEXT> :analyze_command > Output
               | "--file" &path<TEXT> :analyze_file > Output

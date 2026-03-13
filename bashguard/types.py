@@ -15,28 +15,44 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 from data_grammar import Document, Output as BaseOutput
 
+from bashguard.audit_log import log_verdict, read_log
 from bashguard.auditor import audit as _audit
 from bashguard.context import make_context
+from bashguard.llm_fallback import LLMFallbackConfig, llm_review
 from bashguard.models import VerdictType
 from bashguard.policy import PolicyConfig, decide
+from bashguard.project_config import load_project_config, merge_configs
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _run_audit(script: str):
-    """Run security audit and return (findings, verdict)."""
+    """Run security audit and return (findings, verdict).
+
+    Loads .bashguard.yaml from CWD for project-local policy ratcheting.
+    """
+    import os
     ctx = make_context()
+    base_policy = PolicyConfig.default()
+    project_cfg = load_project_config(
+        Path(os.getcwd()) / ".bashguard.yaml"
+    )
+    policy = merge_configs(base_policy, project_cfg)
     findings = _audit(script, ctx)
-    verdict = decide(findings, ctx, PolicyConfig.default())
+    verdict = decide(findings, ctx, policy)
+    # Optional LLM second opinion for CONFIRM cases
+    verdict = llm_review(verdict, script=script, config=LLMFallbackConfig.from_env())
     return findings, verdict
 
 
 def _gates_output(script: str) -> "Output":
     """Audit script and return gates-compatible Output (deny/ask/silent)."""
     _, verdict = _run_audit(script)
+    log_verdict(verdict, command=script)
     if verdict.verdict == VerdictType.ALLOW:
         return Output(text="")
     if verdict.verdict == VerdictType.BLOCK:
@@ -52,6 +68,7 @@ def _gates_output(script: str) -> "Output":
 def _report_output(script: str) -> "Output":
     """Audit script and return full JSON debug report as Output."""
     findings, verdict = _run_audit(script)
+    log_verdict(verdict, command=script)
     data = {
         "commands": [script],
         "violations": [
@@ -89,6 +106,10 @@ class Entry(Document):
         """Create empty AnalyzeScript for analyze mode."""
         return AnalyzeScript()
 
+    def show_log(self) -> "LogQuery":
+        """Create a LogQuery for querying the audit log."""
+        return LogQuery()
+
     def __str__(self) -> str:
         return ""
 
@@ -108,6 +129,50 @@ class AnalyzeScript(Document):
 
     def __str__(self) -> str:
         return ""
+
+
+class LogQuery(Document):
+    """Log query mode — filters and displays audit log entries."""
+
+    def __init__(self, **kwargs):
+        self._verdict_filter: str | None = None
+        self._rule_filter: str | None = None
+        self._limit: int | None = None
+        self._as_json: bool = False
+
+    def filter_verdict(self, verdict: str) -> "LogQuery":
+        self._verdict_filter = verdict.lower()
+        return self
+
+    def filter_rule(self, rule_id: str) -> "LogQuery":
+        self._rule_filter = rule_id
+        return self
+
+    def set_limit(self, n: str) -> "LogQuery":
+        self._limit = int(n)
+        return self
+
+    def use_json(self) -> "LogQuery":
+        self._as_json = True
+        return self
+
+    def __str__(self) -> str:
+        entries = list(read_log(
+            decision=self._verdict_filter,
+            rule_id=self._rule_filter,
+            limit=self._limit,
+        ))
+        if self._as_json:
+            return json.dumps(entries, indent=2)
+        # Human-readable table
+        lines = []
+        for e in entries:
+            ts = e.get("timestamp", "")[:19].replace("T", " ")
+            verdict = e.get("verdict", "?").upper()
+            cmd = e.get("command", "")[:60]
+            rules = ", ".join(f["rule_id"] for f in e.get("findings", []))
+            lines.append(f"{ts}  {verdict:8}  {cmd:<60}  {rules}")
+        return "\n".join(lines)
 
 
 class Output(BaseOutput):

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 
 from bashguard.parser import parse
-from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext, ActionType
 from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
@@ -65,6 +65,7 @@ class DestructiveRule:
                                     message=f"rm -rf on non-/tmp path: {target}",
                                     matched_text=cmd.raw,
                                     metadata={"command": "rm", "target": target},
+                                    action_type=ActionType.FILESYSTEM_DELETE,
                                 )
                                 break
 
@@ -80,6 +81,7 @@ class DestructiveRule:
                             message=f"dd writing to device: {output}",
                             matched_text=cmd.raw,
                             metadata={"command": "dd", "output": output},
+                            action_type=ActionType.FILESYSTEM_DELETE,
                         )
 
                 elif cmd.name in _ALWAYS_DESTRUCTIVE:
@@ -89,6 +91,7 @@ class DestructiveRule:
                         message=f"Destructive command: {cmd.name}",
                         matched_text=cmd.raw,
                         metadata={"command": cmd.name},
+                        action_type=ActionType.FILESYSTEM_DELETE,
                     )
 
                 elif cmd.name == "truncate":
@@ -98,6 +101,7 @@ class DestructiveRule:
                         message="truncate can zero out files irreversibly",
                         matched_text=cmd.raw,
                         metadata={"command": "truncate"},
+                        action_type=ActionType.FILESYSTEM_DELETE,
                     )
 
                 elif cmd.name == "git":
@@ -111,6 +115,7 @@ class DestructiveRule:
                                 message="git clean -f deletes untracked files irreversibly",
                                 matched_text=cmd.raw,
                                 metadata={"command": "git clean"},
+                                action_type=ActionType.FILESYSTEM_DELETE,
                             )
 
                 if finding:

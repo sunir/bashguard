@@ -11,7 +11,7 @@ import logging
 from tree_sitter import Language, Parser
 import tree_sitter_bash as tsb
 
-from bashguard.models import Severity, Finding, ExecutionContext
+from bashguard.models import Severity, Finding, ExecutionContext, ActionType
 from bashguard.rules import register
 
 _log = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ class ErrorNodesRule:
                 matched_text=script,
                 span=(0, len(source)),
                 metadata={"error_count": error_count},
+                action_type=ActionType.OBFUSCATED,
             )]
         except Exception as e:
             _log.error("ErrorNodesRule raised unexpectedly: %s", e, exc_info=True)
