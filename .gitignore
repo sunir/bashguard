@@ -6,6 +6,7 @@ dist/
 .pytest_cache/
 transcripts/
 .status-pin
+.env
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
