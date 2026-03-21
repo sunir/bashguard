@@ -35,6 +35,15 @@ Entry = "hook" @required :hook_mode > Output
             "bash-ast analyze --file script.sh"
           ]
         })
+      | "stats" @required :show_stats > StatsQuery
+        @help({
+          "description": "Show audit log statistics",
+          "examples": [
+            "bashguard stats",
+            "bashguard stats --days 7",
+            "bashguard stats --json"
+          ]
+        })
       | "log" @required :show_log > LogQuery
         @help({
           "description": "Query the audit log",
@@ -46,6 +55,10 @@ Entry = "hook" @required :hook_mode > Output
           ]
         })
       ;
+
+StatsQuery = ("--days" | "-d") &days<TEXT> :set_days > StatsQuery
+           | "--json" :use_json > StatsQuery
+           ;
 
 LogQuery = ("--verdict" | "-v") &verdict<TEXT> :filter_verdict > LogQuery
          | ("--rule" | "-r") &rule_id<TEXT> :filter_rule > LogQuery

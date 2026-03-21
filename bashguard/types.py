@@ -20,6 +20,7 @@ from pathlib import Path
 from data_grammar import Document, Output as BaseOutput
 
 from bashguard.audit_log import log_verdict, read_log
+from bashguard.audit_stats import compute_stats
 from bashguard.auditor import audit as _audit
 from bashguard.context import make_context
 from bashguard.llm_fallback import LLMFallbackConfig, llm_review
@@ -106,6 +107,10 @@ class Entry(Document):
         """Create empty AnalyzeScript for analyze mode."""
         return AnalyzeScript()
 
+    def show_stats(self) -> "StatsQuery":
+        """Create a StatsQuery for audit statistics."""
+        return StatsQuery()
+
     def show_log(self) -> "LogQuery":
         """Create a LogQuery for querying the audit log."""
         return LogQuery()
@@ -129,6 +134,42 @@ class AnalyzeScript(Document):
 
     def __str__(self) -> str:
         return ""
+
+
+class StatsQuery(Document):
+    """Stats query mode — aggregate audit log statistics."""
+
+    def __init__(self, **kwargs):
+        self._days: int | None = None
+        self._as_json: bool = False
+
+    def set_days(self, days: str) -> "StatsQuery":
+        self._days = int(days)
+        return self
+
+    def use_json(self) -> "StatsQuery":
+        self._as_json = True
+        return self
+
+    def __str__(self) -> str:
+        stats = compute_stats(days=self._days)
+        if self._as_json:
+            return json.dumps(stats, indent=2)
+        lines = [
+            f"Total audited:  {stats['total']}",
+            f"Block rate:     {stats['block_rate']:.1%}",
+            "",
+            "By verdict:",
+        ]
+        for verdict, count in sorted(stats["by_verdict"].items()):
+            lines.append(f"  {verdict:10} {count}")
+        if stats["by_rule"]:
+            lines.append("")
+            lines.append("Top rules triggered:")
+            for rule_id, count in sorted(stats["by_rule"].items(),
+                                          key=lambda x: -x[1])[:10]:
+                lines.append(f"  {rule_id:40} {count}")
+        return "\n".join(lines)
 
 
 class LogQuery(Document):
