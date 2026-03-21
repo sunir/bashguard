@@ -19,12 +19,13 @@ from pathlib import Path
 
 from data_grammar import Document, Output as BaseOutput
 
+from bashguard.approval_cache import ApprovalCache
 from bashguard.audit_log import log_verdict, read_log
 from bashguard.audit_stats import compute_stats
 from bashguard.auditor import audit as _audit
 from bashguard.context import make_context
 from bashguard.llm_fallback import LLMFallbackConfig, llm_review
-from bashguard.models import VerdictType
+from bashguard.models import Verdict, VerdictType
 from bashguard.policy import PolicyConfig, decide
 from bashguard.project_config import load_project_config, merge_configs
 
@@ -53,6 +54,17 @@ def _run_audit(script: str):
 def _gates_output(script: str) -> "Output":
     """Audit script and return gates-compatible Output (deny/ask/silent)."""
     _, verdict = _run_audit(script)
+
+    # Approval cache: if CONFIRM and all triggering rules are already approved, upgrade to ALLOW
+    if verdict.verdict == VerdictType.CONFIRM and verdict.findings:
+        cache = ApprovalCache()
+        if all(cache.is_approved(f.rule_id) for f in verdict.findings):
+            verdict = Verdict(
+                verdict=VerdictType.ALLOW,
+                findings=verdict.findings,
+                message=f"[approved] {verdict.message}",
+            )
+
     log_verdict(verdict, command=script)
     if verdict.verdict == VerdictType.ALLOW:
         return Output(text="")
@@ -106,6 +118,16 @@ class Entry(Document):
     def new(self) -> "AnalyzeScript":
         """Create empty AnalyzeScript for analyze mode."""
         return AnalyzeScript()
+
+    def approve_rule(self, rule_id: str) -> "Output":
+        """Grant session approval for a rule."""
+        ApprovalCache().approve(rule_id)
+        return Output(text=f"Approved: {rule_id}")
+
+    def revoke_rule(self, rule_id: str) -> "Output":
+        """Revoke session approval for a rule."""
+        ApprovalCache().revoke(rule_id)
+        return Output(text=f"Revoked: {rule_id}")
 
     def show_stats(self) -> "StatsQuery":
         """Create a StatsQuery for audit statistics."""

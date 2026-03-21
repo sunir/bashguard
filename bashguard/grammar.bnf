@@ -35,6 +35,16 @@ Entry = "hook" @required :hook_mode > Output
             "bash-ast analyze --file script.sh"
           ]
         })
+      | "approve" @required &rule_id<TEXT> :approve_rule > Output
+        @help({
+          "description": "Grant session approval for a rule (skip future CONFIRM prompts)",
+          "examples": ["bashguard approve git.destructive"]
+        })
+      | "revoke" @required &rule_id<TEXT> :revoke_rule > Output
+        @help({
+          "description": "Revoke session approval for a rule",
+          "examples": ["bashguard revoke git.destructive"]
+        })
       | "stats" @required :show_stats > StatsQuery
         @help({
           "description": "Show audit log statistics",
