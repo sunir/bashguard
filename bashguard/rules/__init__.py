@@ -59,6 +59,9 @@ def _load_builtin_rules() -> None:
     from bashguard.rules import content_inspection  # noqa: F401
     from bashguard.rules import self_protection    # noqa: F401
     from bashguard.rules import external_comms     # noqa: F401
+    from bashguard.rules import sql_destruction    # noqa: F401
+    from bashguard.rules import tunneling          # noqa: F401
+    from bashguard.rules import crypto_mining      # noqa: F401
 
 
 _load_builtin_rules()

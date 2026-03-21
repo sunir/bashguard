@@ -111,6 +111,28 @@ class GitScopeRule:
                             action_type=ActionType.GIT_DESTRUCTIVE,
                         )
 
+                elif subcommand == "filter-branch":
+                    finding = Finding(
+                        rule_id=self.rule_id,
+                        severity=Severity.CRITICAL,
+                        message="git filter-branch rewrites history destructively",
+                        matched_text=cmd.raw,
+                        metadata={"subcommand": "filter-branch"},
+                        action_type=ActionType.GIT_DESTRUCTIVE,
+                    )
+
+                elif subcommand == "remote":
+                    remote_action = cmd.args[1] if len(cmd.args) > 1 else ""
+                    if remote_action in {"set-url", "add", "remove", "rm", "rename"}:
+                        finding = Finding(
+                            rule_id=self.rule_id,
+                            severity=self.severity,
+                            message=f"git remote {remote_action} modifies remote configuration",
+                            matched_text=cmd.raw,
+                            metadata={"subcommand": "remote", "action": remote_action},
+                            action_type=ActionType.GIT_DESTRUCTIVE,
+                        )
+
                 if finding:
                     findings.append(finding)
 

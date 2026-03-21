@@ -25,6 +25,11 @@ _PROTECTED_DIRS = (
     "~/.config/gcloud",
     "~/.kube",
     "~/.netrc",
+    # Browser credential stores (n2-ark Category 3)
+    "~/Library/Application Support/Google/Chrome",
+    "~/.config/google-chrome",
+    "~/.mozilla/firefox",
+    "~/Library/Application Support/Firefox",
 )
 
 _PROTECTED_EXACT = (

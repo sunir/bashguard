@@ -65,6 +65,15 @@ class PackageInstallRule:
                                 metadata={"command": cmd.name},
                                 action_type=ActionType.PACKAGE_INSTALL,
                             )
+                    elif subcommand in {"publish", "unpublish"}:
+                        finding = Finding(
+                            rule_id="package_install.publish",
+                            severity=Severity.CRITICAL,
+                            message=f"{cmd.name} {subcommand} — supply chain risk",
+                            matched_text=cmd.raw,
+                            metadata={"command": cmd.name, "subcommand": subcommand},
+                            action_type=ActionType.PACKAGE_INSTALL,
+                        )
 
                 elif cmd.name == "pip" or cmd.name == "pip3":
                     subcommand = cmd.args[0] if cmd.args else ""
