@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 
-HOOKS_DIR = Path.home() / ".claude" / "hooks" / "PreToolUse.d" / "local"
+HOOKS_DIR = Path.home() / ".claude" / "hooks" / "PreToolUse.d" / "system"
 HOOK_LINK = HOOKS_DIR / "70-bashguard"
 REPO_ROOT = Path(__file__).parent.parent
 HOOK_SOURCE = REPO_ROOT / "hooks" / "70-bashguard"
