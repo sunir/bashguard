@@ -2,8 +2,9 @@
 bashguard.setup — Install bashguard as a Claude PreToolUse hook plugin.
 
 `bashguard claude setup` symlinks the bundled hook script into
-~/.claude/hooks/PreToolUse.d/local/70-bashguard so the colony hook
-dispatcher picks it up automatically.
+~/.claude/hooks/PreToolUse.d/system/70-bashguard so the colony hook
+dispatcher picks it up automatically. system/ is the policy layer (runs
+first, managed by setup.d, not in user git).
 
 The target directory can be overridden via BASHGUARD_HOOKS_DIR for testing.
 """
@@ -17,7 +18,7 @@ _PACKAGE_ROOT = Path(__file__).parent.parent
 HOOK_SOURCE = _PACKAGE_ROOT / "hooks" / HOOK_NAME
 
 _DEFAULT_TARGET_DIR = (
-    Path.home() / ".claude" / "hooks" / "PreToolUse.d" / "local"
+    Path.home() / ".claude" / "hooks" / "PreToolUse.d" / "system"
 )
 
 
