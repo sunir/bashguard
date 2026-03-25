@@ -137,6 +137,10 @@ class Entry(Document):
         """Create a LogQuery for querying the audit log."""
         return LogQuery()
 
+    def claude_subcommand(self) -> "ClaudeSetup":
+        """Dispatch to Claude Code integration subcommands."""
+        return ClaudeSetup()
+
     def __str__(self) -> str:
         return ""
 
@@ -236,6 +240,19 @@ class LogQuery(Document):
             rules = ", ".join(f["rule_id"] for f in e.get("findings", []))
             lines.append(f"{ts}  {verdict:8}  {cmd:<60}  {rules}")
         return "\n".join(lines)
+
+
+class ClaudeSetup(Document):
+    """Claude Code integration — installs the PreToolUse hook plugin."""
+
+    def do_setup(self) -> "Output":
+        """Symlink the bundled hook into ~/.claude/hooks/PreToolUse.d/local/."""
+        from bashguard.setup import install_hook
+        link = install_hook()
+        return Output(text=f"Installed: {link}")
+
+    def __str__(self) -> str:
+        return ""
 
 
 class Output(BaseOutput):

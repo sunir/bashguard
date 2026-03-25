@@ -10,7 +10,7 @@ transcripts/
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-03-04 09:08:32
+# Last sync: 2026-03-25 04:18:24
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -21,13 +21,22 @@ transcripts/
 .*.swo
 .*.swp
 .DS_Store
-.automode
 .automode-*
+.automode/
 .automode_gitignore
 .bugs.log
 .claude-map.json
 .claude/agents/
 .claude/hooks/*.d/system/
+.claude/hooks/PostToolUse
+.claude/hooks/PreCompact
+.claude/hooks/PreToolUse
+.claude/hooks/SessionStart
+.claude/hooks/Stop
+.claude/hooks/SubagentStart
+.claude/hooks/SubagentStop
+.claude/hooks/UserPromptSubmit
+.claude/hooks/lib/
 .claude/worktrees/
 .colony
 .deploy.json
@@ -39,7 +48,7 @@ transcripts/
 .project.json
 .status-pin
 .strictmode
-.todo.*
+.todo*
 .venv/
 .vscode/
 __pycache__/
@@ -52,9 +61,11 @@ mail/new/*
 mail/tmp/*
 node_modules/
 rag_index/
+rules/0?-*.md
 rules/99-plan.md
 sessions/
 timelog.json
+transcripts/
 venv/
 
 # Require patterns (must track)
@@ -72,7 +83,6 @@ venv/
 !memories/
 !specs/*.md
 !stories/*.md
-!transcripts/
 
 # === END COLONY RULES ===
 .claude/

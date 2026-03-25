@@ -1,0 +1,14 @@
+#!/bin/bash
+# Plugin: bashguard (PreToolUse)
+# Story: colony-plugin-setup
+#
+# PURPOSE: Intercept Bash tool calls and audit them for dangerous commands.
+#   Non-Bash tools are passed through silently (exit 0).
+#
+# PROTOCOL: Blocking. Exits 2 to deny, 0 to allow.
+# FAIL-OPEN: If bashguard is not installed or errors, exits 0 (allow).
+#
+# Install: bashguard claude setup
+# Uninstall: rm ~/.claude/hooks/PreToolUse.d/local/70-bashguard
+command -v bashguard >/dev/null 2>&1 || exit 0
+exec bashguard hook

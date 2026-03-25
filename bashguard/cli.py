@@ -20,13 +20,14 @@ from pathlib import Path
 
 from data_grammar import DataGrammar, ParseError, ExecutionError, UserError
 
-from bashguard.types import AnalyzeScript, Entry, LogQuery, Output, StatsQuery
+from bashguard.types import AnalyzeScript, ClaudeSetup, Entry, LogQuery, Output, StatsQuery
 
 _GRAMMAR = Path(__file__).parent / "grammar.bnf"
 
 _TYPES = {
     "Entry": Entry,
     "AnalyzeScript": AnalyzeScript,
+    "ClaudeSetup": ClaudeSetup,
     "StatsQuery": StatsQuery,
     "LogQuery": LogQuery,
     "Output": Output,

@@ -64,7 +64,15 @@ Entry = "hook" @required :hook_mode > Output
             "bashguard log -n 20"
           ]
         })
+      | "claude" @required :claude_subcommand > ClaudeSetup
+        @help({
+          "description": "Claude Code integration commands",
+          "examples": ["bashguard claude setup"]
+        })
       ;
+
+ClaudeSetup = "setup" :do_setup > Output
+            ;
 
 StatsQuery = ("--days" | "-d") &days<TEXT> :set_days > StatsQuery
            | "--json" :use_json > StatsQuery
