@@ -88,4 +88,6 @@ venv/
 .claude/
 memories/
 rules/
+!bashguard/rules/
+!tests/rules/
 done.log
