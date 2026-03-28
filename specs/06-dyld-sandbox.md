@@ -1,8 +1,8 @@
 # Spec 06: macOS Containment Layer for AI Agents
 
-**Status:** Proposed
+**Status:** Empirically tested — DYLD approach eliminated; hdiutil approach validated
 **Author:** bashguard
-**Date:** 2026-03-27
+**Date:** 2026-03-27, experiments run 2026-03-28
 
 ---
 
@@ -32,6 +32,124 @@ Furthermore, bashguard only covers the `Bash` tool. Claude can also cause filesy
 - Scripts it writes and then executes
 
 **Goal:** Add a non-cooperative containment layer that an average Mac user can set up in under 60 seconds with no prerequisites.
+
+---
+
+## Empirical Results (run 2026-03-28)
+
+These experiments were run before deciding whether to build. Results are authoritative — they resolve the theoretical uncertainties in the SR&ED section.
+
+### E2: SIP / Hardened Runtime status of Claude Code
+
+```
+$ codesign -dv --verbose=4 /Applications/Claude.app/Contents/MacOS/Claude
+Identifier=com.anthropic.claudefordesktop
+flags=0x10000(runtime)     ← Hardened Runtime ENABLED
+TeamIdentifier=Q6L2SF6YDW
+```
+
+Entitlements: `allow-jit`, camera, bluetooth, audio, location. **`com.apple.security.cs.allow-dyld-environment-variables` is NOT present.**
+
+All four Claude helper processes (main, GPU, Plugin, Renderer) have identical `flags=0x10000(runtime)`. None grant DYLD env vars.
+
+**Result: DYLD_INSERT_LIBRARIES is stripped for all Claude Code processes. The DYLD containment approach is dead for Claude Code.**
+
+Hardened Runtime without `allow-dyld-environment-variables` causes the dynamic linker to silently strip `DYLD_INSERT_LIBRARIES` before the process starts. No injection occurs. No error is raised. The process runs unsandboxed.
+
+### E5a: launchctl setenv propagation
+
+```
+$ launchctl setenv BASHGUARD_TEST_VAR probe_123
+$ /usr/bin/env bash -c 'echo $BASHGUARD_TEST_VAR'
+(empty)
+$ launchctl print user/$(id -u) | grep BASHGUARD
+(nothing)
+```
+
+**Result: launchctl setenv does NOT propagate to new child processes in the current session.** Method A (LaunchAgent plist) is eliminated for same-session use. Possibly works after login/logout — not tested, but irrelevant given DYLD is dead for Claude Code anyway.
+
+### E5b: LSEnvironment app wrapper
+
+```
+$ open TestDYLD.app
+_LSOpenURLsWithCompletionHandler() failed with error -54
+```
+
+**Result: LSEnvironment app wrapper approach failed.** Error -54 = `kLSNotAnApplicationErr` or signing issue. Even if it worked, Hardened Runtime would strip the DYLD env var anyway.
+
+### E1 (partial): DYLD does fire in Python
+
+```
+$ DYLD_INSERT_LIBRARIES=/tmp/test_dyld.dylib python3 -c "import os; print('ran')"
+ran
+DYLD FIRED in Python  ← dylib constructor executed
+```
+
+**Result: DYLD injection works for non-hardened processes.** Python at `.venv/bin/python3` is not Hardened Runtime — DYLD fires. This is useful for wrapping bashguard's own processes if needed, but does not help with containing Claude Code.
+
+### hdiutil sparse image (not in original experiments — run empirically)
+
+```
+$ hdiutil create -size 5g -fs APFS -volname sandbox -type SPARSE /tmp/test.sparseimage
+created: /tmp/test.sparseimage
+$ ls -lh /tmp/test.sparseimage
+-rw-r--r--  13M   ← starts at 13MB despite 5GB allocation
+$ hdiutil attach /tmp/test.sparseimage
+/dev/disk5s1  /Volumes/sandbox
+$ # write, delete, rename all work normally inside mount
+$ hdiutil detach /Volumes/sandbox   ← discard = detach
+```
+
+- Sparse image starts at 13MB for a 5GB allocation ✅
+- Grows as data is written (wrote 10MB → image grew to 24MB) ✅
+- Write / delete / rename all work inside mount ✅
+- Full image returns ENOSPC cleanly, does not crash ✅
+- Detach = discard all writes to mount, original project untouched ✅
+- Image file persists if you want to commit changes back ✅
+- Zero dependencies — `hdiutil` is on every Mac ✅
+
+**Result: hdiutil sparse APFS image is the viable containment mechanism.**
+
+### APFS snapshot rollback
+
+```
+$ tmutil localsnapshot /
+Created local snapshot with date: 2026-03-28-180923
+NOTE: local snapshots are considered purgeable
+$ mount_apfs -s com.apple.TimeMachine.2026-03-28-180923.local / /tmp/mnt
+mount_apfs: volume could not be mounted: Resource busy
+```
+
+Mounting a snapshot of the live root volume fails with "Resource busy" — the volume is in active use. `df` on the mount point shows the real volume, not the snapshot. **Programmatic surgical rollback from an APFS snapshot on a live system is not viable via shell commands.**
+
+`tmutil restore` can roll back the whole volume but requires user interaction and is destructive. Not suitable for automated `bashguard session revert`.
+
+**Result: APFS snapshot is useful as a manual last-resort recovery (via Time Machine UI) but NOT as an automated rollback mechanism. The hdiutil image is the correct tool for automated discard/commit.**
+
+---
+
+## Revised Architecture (post-experiment)
+
+The DYLD layer is eliminated entirely. Architecture simplifies to two layers:
+
+```
+bashguard session start
+├── Creates sparse APFS image (hdiutil, zero-dependency)
+│   └── Project directory copied into /Volumes/claude-sandbox-<uuid>/
+│       All writes stay in image. Detach = discard. Commit = copy back.
+│
+└── Creates APFS snapshot (tmutil, zero-dependency)
+    └── Last-resort manual recovery via Time Machine UI
+        (not automated rollback — mount-while-live doesn't work)
+
+bashguard hook (already installed)
+└── Semantic AST analysis: network, credentials, evasion, dangerous commands
+    Proactive blocking BEFORE execution
+```
+
+The disk image covers the working directory. The hook layer covers everything semantic. The snapshot is an emergency undo for humans, not for scripts.
+
+The Dock-launch problem is now moot — there's no DYLD to inject. The disk image approach requires Claude to be working inside the mount point, which `bashguard session start` sets up by copying the project in and printing the new path. The user does `cd` to the mounted path. That's the only behaviour change required.
 
 ---
 
