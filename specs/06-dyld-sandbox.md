@@ -1,8 +1,24 @@
-# Spec 06: DYLD_INSERT_LIBRARIES Filesystem Sandbox
+# Spec 06: macOS Containment Layer for AI Agents
 
 **Status:** Proposed
 **Author:** bashguard
 **Date:** 2026-03-27
+
+---
+
+## User Persona
+
+**Target user:** Someone who downloaded Claude Code, ran `bashguard claude setup`, and wants to not accidentally destroy their Mac while using it. They are not a kernel developer. They do not want to approve System Extensions. They are comfortable running a command in a terminal but will not build a C library from source or patch their OS.
+
+**Hard constraints from this persona:**
+- No kernel extensions (rules out macFUSE as primary approach)
+- No `sudo` or root
+- No compiling from source
+- No configuration more complex than running one command
+- Must work with Claude Code launched from the Dock (not just from a terminal session)
+- Must work on a stock macOS install with no prerequisites
+
+This constrains the architecture significantly. Almost everything interesting in macOS sandboxing requires at least one of these things. The spec documents what survives the filter.
 
 ---
 
@@ -15,7 +31,7 @@ Furthermore, bashguard only covers the `Bash` tool. Claude can also cause filesy
 - MCP tool calls that exec subprocesses
 - Scripts it writes and then executes
 
-**Goal:** Add a non-cooperative containment layer that catches what bashguard's hooks miss, without requiring kernel extensions, root, or OS-specific configuration.
+**Goal:** Add a non-cooperative containment layer that an average Mac user can set up in under 60 seconds with no prerequisites.
 
 ---
 
@@ -53,34 +69,66 @@ A single dylib intercepting these 6 symbol families covers the vast majority of 
 
 ---
 
+## What survives the average-punter filter
+
+| Mechanism | Requires | Survives filter? |
+|---|---|---|
+| macFUSE | Kernel extension + System Preferences approval | **No** |
+| Endpoint Security Framework | Apple entitlement (security vendors only) | **No** |
+| `DYLD_INSERT_LIBRARIES` (self-built) | Compile a C dylib | **No** |
+| `DYLD_INSERT_LIBRARIES` (pre-compiled, shipped with bashguard) | `pip install bashguard` | **Yes, conditionally** |
+| `hdiutil` sparse image | Nothing — built into every Mac | **Yes** |
+| APFS snapshot (`tmutil`) | Nothing — built into every Mac | **Yes** |
+| nullfs / bind mount | `mount -t nullfs` — built in, needs no install | **Yes** |
+
+The viable stack for the average punter:
+
+**Layer 1 — APFS snapshot (zero setup, already on every Mac)**
+`bashguard session start` snapshots the current state. If Claude destroys something, `bashguard session revert` rolls back. Not real-time blocking — it's an undo button. Paired with the hook layer, which prevents most destruction proactively, the snapshot catches whatever slips through.
+
+**Layer 2 — sparse disk image for working directory (zero setup, hdiutil is built-in)**
+`bashguard session start` also creates a sparse APFS image, mounts it, copies the project in. Claude works inside the mount. All writes are contained to the image. Unmount = discard. Commit = copy back.
+
+**Layer 3 — DYLD (shipped pre-compiled in the bashguard package)**
+The dylib is compiled during `pip install bashguard` (or distributed as a pre-built wheel per platform) and lives in the package directory. `bashguard session start` sets `DYLD_INSERT_LIBRARIES` in a wrapper script that launches Claude Code. The user runs `bashguard launch` instead of clicking the Dock icon. This is the one step that requires terminal usage — acceptable for the target user since they're already using Claude Code from a terminal context.
+
+**The problem this doesn't solve: Dock-launched Claude Code**
+If the user launches Claude from the Dock, no env vars are set, the dylib doesn't load, the disk image mount only covers the working directory (if Claude navigates out, it's unprotected). The APFS snapshot still works because it's independent of how Claude was launched. For full protection, the user must launch Claude via `bashguard launch`.
+
 ## Proposed Architecture
 
 ```
-Claude Code process
+User runs: bashguard session start
 │
-├── DYLD_INSERT_LIBRARIES=libashguard_sandbox.dylib
-│   │
-│   ├── Intercepts: unlink, rmdir, rename, truncate, open(O_TRUNC)
-│   │   │
-│   │   ├── Path inside SANDBOX_ROOT?
-│   │   │   └── Allow (write to working dir is fine)
-│   │   │
-│   │   ├── Path in PROTECTED_PATHS (/etc, ~/.ssh, ~/.aws, etc.)?
-│   │   │   └── DENY → set errno=EPERM, return -1
-│   │   │
-│   │   └── Path outside SANDBOX_ROOT, not protected?
-│   │       └── REDIRECT → rewrite to $SANDBOX_OVERLAY/path
-│   │           (copy-on-write: original untouched, write goes to overlay)
-│   │
-│   └── All other calls: pass through to real libc
+├── 1. APFS snapshot created (tmutil localsnapshot)
+│      └── Rollback available at any time
 │
-└── PreToolUse hook (existing bashguard hook layer)
-    └── Semantic AST analysis (network, credentials, evasion, etc.)
+├── 2. Sparse disk image created and mounted
+│      /Volumes/claude-sandbox-<uuid>/
+│      └── Project copied in, Claude's CWD set here
+│
+└── 3. Writes: bashguard_launch script created
+       Sets DYLD_INSERT_LIBRARIES → libashguard_sandbox.dylib
+       Launches: open -a "Claude" --env ...
+       (or: claude CLI with env vars set)
+
+At runtime:
+├── DYLD layer (if launched via bashguard launch)
+│   ├── Intercepts unlink/rmdir/rename/truncate/open(O_WRONLY)
+│   ├── Protected paths (/etc, ~/.ssh, ~/.aws) → EPERM
+│   └── Other paths outside CWD → redirect to overlay
+│
+├── Disk image mount
+│   └── CWD writes contained to sparse image
+│
+├── PreToolUse hook (already installed)
+│   └── Semantic AST: network, credentials, evasion, dangerous commands
+│
+└── APFS snapshot
+    └── Full rollback if all else fails
 ```
 
-Two layers, orthogonal coverage:
-- **Hook layer**: semantic intent (what does this command *mean*)
-- **Dylib layer**: filesystem enforcement (what does this command *do*)
+Four layers, three requiring zero installation beyond `pip install bashguard`.
 
 ---
 
@@ -239,7 +287,10 @@ bashguard session status
 1. Creates `~/.bashguard/sessions/<uuid>/overlay/` directory tree
 2. Sets `BASHGUARD_SANDBOX_ROOT` to working dir
 3. Sets `BASHGUARD_OVERLAY_DIR` to the overlay path
-4. Emits shell exports for the user to `eval`: `eval $(bashguard session start)`
+4. Creates `~/.bashguard/launch-claude.sh` — a wrapper that sets env vars and launches Claude Code
+5. Prints: `Session started. To launch Claude with full sandbox: bashguard launch`
+
+No `eval $(...)` — that's developer UX, not average-punter UX.
 
 `diff`:
 - Walks `overlay/` and shows what was written vs original
@@ -292,6 +343,7 @@ exec bashguard hook
 
 **Winner for zero-friction deploy: DYLD_INSERT_LIBRARIES**
 **Winner for complete coverage: macFUSE**
+**Disqualified for average-punter target: macFUSE** (kernel extension approval required)
 
 ### DYLD_INSERT_LIBRARIES vs. disk image mount
 
@@ -310,14 +362,35 @@ exec bashguard hook
 **Winner for completeness within scope: disk image**
 **Winner for arbitrary path protection: DYLD_INSERT_LIBRARIES**
 
+### The Dock-launch problem
+
+**This is the hardest UX problem in the entire spec.**
+
+`DYLD_INSERT_LIBRARIES` only applies to processes that inherit the env var. Claude Code launched from the macOS Dock gets a clean environment — no `DYLD_INSERT_LIBRARIES`, no sandbox, full access. The average punter's default behaviour is to click the Dock icon.
+
+Mitigations ranked by user friction:
+
+| Mitigation | Friction | Coverage |
+|---|---|---|
+| `bashguard launch` — user runs this instead of clicking Dock | Low (one command to learn) | Full DYLD + disk image |
+| Replace Dock icon with `bashguard launch` shortcut | Medium (one-time setup) | Full DYLD + disk image |
+| `launchd` environment plist to set `DYLD_INSERT_LIBRARIES` system-wide | High (edit plist, reboot) | Full but invasive |
+| APFS snapshot only | Zero (independent of launch method) | Rollback only, no real-time blocking |
+
+**Recommendation:** APFS snapshot as unconditional baseline (zero friction, works regardless of how Claude is launched). `bashguard launch` as the path to full protection for users willing to change one habit.
+
+The average punter gets meaningful protection from the snapshot + hook layers even without changing their launch behaviour. The DYLD layer is an opt-in for users who want the strongest guarantee.
+
 ### Combined architecture (recommended)
 
-Use both:
-- Disk image for working directory containment (strong, kernel-enforced)
-- DYLD_INSERT_LIBRARIES for home dir / credential path protection (catches writes to ~/.ssh, ~/.aws, etc. that escape the working dir mount)
-- bashguard hook layer for network, semantic intent, evasion detection
+| Layer | Mechanism | User action required | What it catches |
+|---|---|---|---|
+| Hook (deployed) | PreToolUse AST analysis | Nothing (already installed) | Network, credentials, known-dangerous commands |
+| Snapshot | APFS tmutil | `bashguard session start` | Everything — undo button |
+| Disk image | hdiutil sparse image | `bashguard session start` | CWD writes, IDE/tool damage |
+| DYLD interposition | libashguard_sandbox.dylib (pre-compiled, shipped) | `bashguard launch` instead of Dock | Home dir writes outside CWD, credential stores |
 
-No single layer has full coverage. Three orthogonal layers together cover the main threat surface.
+No single layer has full coverage. The combination covers the practical threat surface for an idiot-agent scenario without requiring the user to understand how any of it works.
 
 ---
 
@@ -401,6 +474,67 @@ dtrace -n 'syscall::unlink:entry { @[execname, ustack()] = count(); }'
 
 **Known hard case:** `rename()` across overlay/real boundary (source in overlay, dest in real or vice versa) requires special handling — cannot use real `rename()` across filesystems. Must copy + delete.
 
+### Experiment 5: Dock-launch environment injection
+
+This is the highest-priority experiment because it determines whether the average-punter target is achievable without a behaviour change.
+
+**The question:** Can `DYLD_INSERT_LIBRARIES` be injected into Claude Code when launched from the macOS Dock, without kernel extensions, without root, and without the user understanding what is happening?
+
+**Method A — launchd user agent:**
+Create `~/Library/LaunchAgents/io.bashguard.env.plist` that sets `DYLD_INSERT_LIBRARIES` as a user-level environment variable via `launchctl setenv`. This propagates to all processes launched in the user session including Dock launches.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.bashguard.env</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/launchctl</string>
+        <string>setenv</string>
+        <string>DYLD_INSERT_LIBRARIES</string>
+        <string>/path/to/libashguard_sandbox.dylib</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+```
+
+`bashguard claude setup` would install this plist. On next login, all user processes inherit the env var — including Dock-launched Claude Code. No `sudo`. No kernel extension. No user interaction beyond the initial `bashguard claude setup`.
+
+**The catch:** `launchctl setenv` propagates to new processes but NOT to already-running processes. The user must log out and back in, or restart the affected app, after first install.
+
+**Method B — Dock item replacement:**
+`bashguard claude setup` replaces or adds a Dock tile that runs `bashguard launch` (a shell script) instead of `Claude.app` directly. Uses `dockutil` (third-party, requires install) or a manual `defaults write com.apple.dock` approach. Fragile — Dock layout is user-managed.
+
+**Method C — app wrapper:**
+Create `/Applications/Claude (Sandboxed).app` — a minimal macOS app bundle whose `Info.plist` sets `LSEnvironment` to include `DYLD_INSERT_LIBRARIES`. `bashguard claude setup` creates this bundle. User adds it to Dock. One-time setup, then works like Dock click.
+
+```xml
+<!-- Info.plist inside wrapper app -->
+<key>LSEnvironment</key>
+<dict>
+    <key>DYLD_INSERT_LIBRARIES</key>
+    <string>/path/to/libashguard_sandbox.dylib</string>
+</dict>
+```
+
+**Method D — accept the constraint:**
+Abandon Dock-launch DYLD coverage. Document clearly: "Full sandbox requires `bashguard launch`". APFS snapshot covers Dock-launched sessions. Punter UX: learn one command.
+
+**Experiments to run:**
+1. Does `launchctl setenv DYLD_INSERT_LIBRARIES` in a LaunchAgent propagate to Claude Code launched from Dock? (macOS may specifically strip it for Electron apps.)
+2. Does `LSEnvironment` in an app wrapper Info.plist survive SIP stripping for non-system apps?
+3. Which approach has the lowest failure rate across macOS 13, 14, 15?
+
+**Success criterion for Method A:** `launchctl setenv` → Dock launch → dylib constructor fires. No logout required after subsequent `bashguard` updates (env var points to a fixed path that we update in place).
+
+**Expected result:** Method A likely works on macOS 13–14. macOS 15 tightened `launchctl setenv` propagation in some configurations — empirical test required. Method C (app wrapper with `LSEnvironment`) is the most reliable historically but requires user to change their Dock tile once.
+
 ### SR&ED Eligibility Rationale
 
 This work constitutes SR&ED under CRA guidelines because:
@@ -417,7 +551,16 @@ This work constitutes SR&ED under CRA guidelines because:
 
 ## Open Questions
 
-1. Does Electron's Node.js subprocess inherit `DYLD_INSERT_LIBRARIES`? Node may clear the environment before spawning bash.
-2. Does the `unlinkat()` family need separate interposition? Linux agents use `unlinkat` heavily; macOS behavior differs.
-3. Python's `os.remove()` on macOS — does it use `unlink()` or `unlinkat(AT_FDCWD, ...)`? Need to verify with `nm` or DTrace.
-4. What happens when the overlay filesystem fills up? Need graceful degradation (fall through to real path or deny).
+### Technical
+1. Does Electron's Node.js subprocess inherit `DYLD_INSERT_LIBRARIES`? Node may clear the environment before spawning bash — meaning Claude's actual bash execution is unprotected even if the parent Electron process is sandboxed.
+2. Does the `unlinkat()` family need separate interposition? Python 3.12+ on macOS uses `unlinkat(AT_FDCWD, path, 0)` rather than `unlink(path)` — these are different syscalls and different symbols.
+3. What happens when the overlay filesystem fills up? Need graceful degradation: fall through to real path (silently unsafe) or deny with ENOSPC (honest but surprising to Claude).
+4. `rename()` across overlay/real boundary — cannot use real `rename()` across filesystems. Must copy+unlink. Does this break anything expecting atomic rename semantics?
+
+### User experience
+5. When Claude hits `EPERM` on a delete or write, it sees an error and may retry, ask for help, or silently work around it. Is the failure mode confusing enough to break workflows? Need to test with real Claude usage.
+6. How does the user know the sandbox is active? Need a `bashguard session status` that Claude can check and report.
+7. What is the right default for paths outside the working dir — DENY or REDIRECT? DENY is safer but will break legitimate operations (e.g. writing to `/tmp`). REDIRECT silently captures everything, which is correct for CoW but surprising.
+
+### Scope creep risks
+8. Once you have session start/commit/discard, users will want `bashguard session review` (show diffs before committing) and `bashguard session cherry-pick` (commit only some changes). This is approaching git-for-filesystem territory. Define the minimum viable set and hold it.
