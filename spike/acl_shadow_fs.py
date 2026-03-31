@@ -57,10 +57,18 @@ class ACLShadowFS(ShadowFS):
         ):
             raise FuseOSError(errno.EPERM)
 
+    def _is_inside_grant(self, path: str) -> bool:
+        normalized = posixpath.normpath("/" + path.lstrip("/"))
+        return normalized == self._granted_root or normalized.startswith(
+            self._granted_root.rstrip("/") + "/"
+        )
+
     # --- stat ---
+    # getattr is allowed everywhere: FUSE needs to traverse "/" and intermediate
+    # dirs to reach the granted subtree. Think of it as the "x" bit on dirs.
+    # Content access (readdir, read, write, open, unlink) is blocked outside grant.
 
     def getattr(self, path, fh=None):
-        self._check_access(path)
         return super().getattr(path, fh)
 
     def readlink(self, path):

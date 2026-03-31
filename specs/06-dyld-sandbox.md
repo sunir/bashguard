@@ -197,6 +197,35 @@ Auth flow:
 
 **Result: W4 complete. All waypoints S1→S3 and W1→W4 reached. The winner's circle (W5) remains: multi-agent virtual FS with session commit/discard and `bashguard session start` CLI.**
 
+### W5: Session CLI — winner's circle (2026-03-31)
+
+`spike/session.py` wires all layers into `bashguard-session start/stop/list`.
+
+```
+$ python3 spike/session.py start --project ~/source/my-repo
+Session started: 2f00384d282ffabb
+Work dir: ~/.bashguard/mounts/2f00384d282ffabb/my-repo
+  cd ~/.bashguard/mounts/2f00384d282ffabb/my-repo
+
+$ ls ~/.bashguard/mounts/2f00384d282ffabb/my-repo/   # real project visible
+$ echo "change" > ~/.bashguard/mounts/.../my-repo/file.py  # overlay captures it
+$ ls ~/source/my-repo/                                # real dir untouched
+
+$ python3 spike/session.py stop 2f00384d282ffabb
+Session stopped. # unmounts, removes .bashguard-token, discards overlay
+```
+
+Key design fix found during testing: `getattr` must be allowed on all paths (not
+just inside grant) because FUSE calls `getattr("/")` during mount init. Content
+ops (`readdir`, `open`, `read`, `write`, `unlink`) remain blocked outside grant.
+This mirrors Unix directory execute-bit semantics: traverse allowed, list/read blocked.
+
+15 unit tests. 459 total passing.
+
+**Result: W5 (winner's circle) reached as a spike. The full multi-agent sandbox
+is now demonstrably feasible: FUSE-T + token auth + ACL + overlay = agent-per-dir
+containment with zero kext approval, zero Recovery boot, one `brew install`.**
+
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 
 ```

@@ -103,10 +103,11 @@ class TestOutsideGrant:
             fs.unlink("/outside/secret.txt")
         assert exc.value.errno == errno.EPERM
 
-    def test_getattr_outside_grant_blocked(self, fs: ACLShadowFS):
-        with pytest.raises(FuseOSError) as exc:
-            fs.getattr("/outside/secret.txt")
-        assert exc.value.errno == errno.EPERM
+    def test_getattr_outside_grant_allowed_for_traversal(self, fs: ACLShadowFS):
+        # getattr is allowed everywhere so FUSE can traverse to the granted root.
+        # This is the directory "x" bit — you can stat, but not list or read content.
+        st = fs.getattr("/outside")
+        assert stat.S_ISDIR(st["st_mode"])
 
     def test_readdir_outside_grant_blocked(self, fs: ACLShadowFS):
         with pytest.raises(FuseOSError) as exc:
