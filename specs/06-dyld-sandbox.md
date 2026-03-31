@@ -35,7 +35,7 @@ Furthermore, bashguard only covers the `Bash` tool. Claude can also cause filesy
 
 ---
 
-## Empirical Results (run 2026-03-28)
+## Empirical Results (run 2026-03-28, updated 2026-03-31)
 
 These experiments were run before deciding whether to build. Results are authoritative — they resolve the theoretical uncertainties in the SR&ED section.
 
@@ -108,7 +108,29 @@ $ hdiutil detach /Volumes/sandbox   ← discard = detach
 - Image file persists if you want to commit changes back ✅
 - Zero dependencies — `hdiutil` is on every Mac ✅
 
-**Result: hdiutil sparse APFS image is the viable containment mechanism.**
+**Result: hdiutil sparse APFS image is the viable single-agent containment mechanism.**
+
+### FUSE-T shadow FS spike (2026-03-31)
+
+Implemented and tested `spike/passthrough_fs.py` and `spike/shadow_fs.py` using
+fusepy + FUSE-T (kext-less, NFS v4 local server, no Recovery boot required).
+
+```
+$ brew install --cask fuse-t   # no reboot, no kext approval
+$ sudo ln -s /usr/local/lib/libfuse-t.dylib /usr/local/lib/libfuse.dylib
+$ python3 spike/passthrough_fs.py /tmp/real /tmp/fuse-passthrough
+→ ls/cat/write/unmount all work, 6.9ms/read overhead (acceptable)
+
+$ python3 spike/shadow_fs.py /tmp/real /tmp/fuse-passthrough
+→ reads pass through to real dir ✅
+→ writes go to overlay, real dir untouched ✅
+→ creates: visible in FUSE, absent from real dir ✅
+→ deletes: tombstoned in FUSE, real file untouched ✅
+→ renames: overlay-only, real files untouched ✅
+→ 25 unit tests passing ✅
+```
+
+**Result: FUSE-T shadow FS is the viable multi-agent containment primitive (W2/S2 in the waypoint plan). Next waypoint: subtree ACL enforcement (W3).**
 
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 

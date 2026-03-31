@@ -193,13 +193,16 @@ class ShadowFS(Operations):
         writable = bool(flags & (os.O_WRONLY | os.O_RDWR))
         # If opening for write and not in overlay yet, copy real content in
         if writable and path not in self._overlay:
-            real = self._real(path)
-            if os.path.isfile(real):
-                with open(real, "rb") as f:
-                    self._overlay[path] = f.read()
-            else:
+            if flags & os.O_TRUNC:
                 self._overlay[path] = b""
-        if flags & os.O_TRUNC and path in self._overlay:
+            else:
+                real = self._real(path)
+                if os.path.isfile(real):
+                    with open(real, "rb") as f:
+                        self._overlay[path] = f.read()
+                else:
+                    self._overlay[path] = b""
+        elif flags & os.O_TRUNC:
             self._overlay[path] = b""
         fh = self._next_fh()
         self._open_files[fh] = (path, writable)
