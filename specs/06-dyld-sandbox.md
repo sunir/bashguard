@@ -164,6 +164,39 @@ ACLShadowFS(real_root="/source", granted_root="/bashguard")
 
 **Result: W3 complete. Next waypoint: token auth (W4) — `.bashguard-token` in CWD identifies agent.**
 
+### W4: Token-based agent authentication (2026-03-31)
+
+`spike/token_auth_fs.py` adds a `TokenRegistry` and `TokenAuthFS` layer on top of ACLShadowFS.
+
+```python
+registry = TokenRegistry()
+registry.register("token-alice-abc123", "/alice")
+registry.register("token-bob-xyz789", "/bob")
+
+# Agent launched with CWD containing .bashguard-token = "token-alice-abc123"
+fs = TokenAuthFS(real_root="/source", registry=registry, agent_cwd="/work/alice")
+# → grants /alice, blocks everything else
+```
+
+Auth flow:
+1. `bashguard session start` generates a token, writes `.bashguard-token` to agent CWD, registers token → subtree with FUSE daemon
+2. FUSE daemon reads token on `TokenAuthFS` init
+3. All ops checked against token's granted subtree
+4. Agent outside its CWD cannot read another dir's `.bashguard-token` (FUSE blocks it)
+
+14 unit tests:
+- Token loaded and mapped to grant ✅
+- Missing token file → InvalidTokenError ✅
+- Unknown token → InvalidTokenError ✅
+- Whitespace/newline in token file stripped ✅
+- Alice reads own dir, blocked from Bob's ✅
+- Bob reads own dir, blocked from Alice's ✅
+- Writes stay in overlay (real dir untouched) ✅
+- TokenRegistry register/lookup/revoke ✅
+- 444 total tests passing ✅
+
+**Result: W4 complete. All waypoints S1→S3 and W1→W4 reached. The winner's circle (W5) remains: multi-agent virtual FS with session commit/discard and `bashguard session start` CLI.**
+
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 
 ```
