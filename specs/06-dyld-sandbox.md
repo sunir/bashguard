@@ -1,8 +1,8 @@
 # Spec 06: macOS Containment Layer for AI Agents
 
-**Status:** Empirically tested — DYLD approach eliminated; hdiutil approach validated
+**Status:** Empirically tested — DYLD dead; hdiutil validated; macFUSE requires Recovery boot on Apple Silicon; FUSE-T identified as viable kext-less alternative
 **Author:** bashguard
-**Date:** 2026-03-27, experiments run 2026-03-28
+**Date:** 2026-03-27, experiments run 2026-03-28, 2026-03-31
 
 ---
 
@@ -110,6 +110,49 @@ $ hdiutil detach /Volumes/sandbox   ← discard = detach
 
 **Result: hdiutil sparse APFS image is the viable containment mechanism.**
 
+### macFUSE System Extension on Apple Silicon (2026-03-31)
+
+```
+$ brew install macfuse   # installs 5.1.3
+$ .venv/bin/python3 spike/passthrough_fs.py /tmp/fuse-real /tmp/fuse-passthrough
+RuntimeError: 1
+mount_macfuse: the file system is not available (1)
+```
+
+Attempting to mount triggers the macOS System Extension blocked dialog:
+> "A program tried to load new system extension(s) signed by Benjamin Fleischer
+>  but your security settings do not allow system extensions."
+
+Clicking "Open System Settings" → "Allow" triggers a second dialog:
+> "To enable system extensions, you need to modify your security settings
+>  in the Recovery environment. To do this, shut down your system. Then
+>  press and hold the Touch ID or power button to launch Startup Security
+>  Utility. In Startup Security Utility, enable kernel extensions from the
+>  Security Policy button."
+
+**Result: macFUSE on Apple Silicon (M-series) requires a Recovery boot to lower Security Policy from Full to Reduced Security.** This is a one-time setup but violates the average-punter constraint (no reboots into Recovery). macFUSE is **eliminated for average-punter target on Apple Silicon**.
+
+On Intel Macs the path may be a simpler System Preferences approval — not tested.
+
+### FUSE-T (2026-03-31)
+
+FUSE-T is a kext-less FUSE implementation that uses an NFS v4 local server instead of a kernel extension. No Recovery boot. No security policy change.
+
+```
+$ brew install --cask fuse-t   # or pkg from fuse-t.org
+# No reboot. No approval dialog. Done.
+```
+
+FUSE-T provides the same `libfuse` API (libfuse2/libfuse3 compatible). Existing `fusepy`-based code works unchanged because `fusepy` links against `libfuse.dylib` — FUSE-T replaces that library.
+
+- Install: simple pkg, no kext approval ✅
+- API: libfuse2/3 compatible — same `fusepy` Python code ✅
+- Performance: NFS v4 local (slightly more overhead than kext but negligible for agent workloads) ✅
+- Future-proof: aligned with Apple's direction (Apple is deprecating kexts) ✅
+- License: proprietary but free for use ⚠️ (macFUSE is open source)
+
+**Result: FUSE-T is the viable kext-less shadow VFS path for average punters on Apple Silicon.**
+
 ### APFS snapshot rollback
 
 ```
@@ -191,7 +234,8 @@ A single dylib intercepting these 6 symbol families covers the vast majority of 
 
 | Mechanism | Requires | Survives filter? |
 |---|---|---|
-| macFUSE | Kernel extension + System Preferences approval | **No** |
+| macFUSE | Kernel extension + Recovery boot (Apple Silicon) or System Preferences approval (Intel) | **No** |
+| FUSE-T | `brew install --cask fuse-t` — no kext, no reboot | **Yes** |
 | Endpoint Security Framework | Apple entitlement (security vendors only) | **No** |
 | `DYLD_INSERT_LIBRARIES` (self-built) | Compile a C dylib | **No** |
 | `DYLD_INSERT_LIBRARIES` (pre-compiled, shipped with bashguard) | `pip install bashguard` | **Yes, conditionally** |
