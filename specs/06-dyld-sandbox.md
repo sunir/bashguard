@@ -130,7 +130,18 @@ $ python3 spike/shadow_fs.py /tmp/real /tmp/fuse-passthrough
 → 25 unit tests passing ✅
 ```
 
-**Result: FUSE-T shadow FS is the viable multi-agent containment primitive (W2/S2 in the waypoint plan). Next waypoint: subtree ACL enforcement (W3).**
+**Result: FUSE-T shadow FS is the viable multi-agent containment primitive (W2/S2 in the waypoint plan).**
+
+### S3: Shadow FS over real project directory (2026-03-31)
+
+Mounted shadow FS over a real git repo copy and ran integration tests:
+- `ls`, `cat`, `write`, `delete` all work through FUSE ✅
+- `git status` runs correctly through FUSE ✅
+- `git` sees overlay writes as modifications (correct CoW behavior) ✅
+- Real project dir is bit-for-bit unchanged after all writes/deletes ✅
+- 8 integration tests + 25 unit tests = 33 shadow FS tests passing (413 total) ✅
+
+**Result: S3 complete. Next waypoint: subtree ACL enforcement (W3) — block access outside granted tree.**
 
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 
