@@ -143,6 +143,27 @@ Mounted shadow FS over a real git repo copy and ran integration tests:
 
 **Result: S3 complete. Next waypoint: subtree ACL enforcement (W3) — block access outside granted tree.**
 
+### W3: Subtree ACL enforcement (2026-03-31)
+
+`spike/acl_shadow_fs.py` extends ShadowFS with a `granted_root` parameter.
+All FUSE operations check the path against the grant before proceeding.
+
+```python
+ACLShadowFS(real_root="/source", granted_root="/bashguard")
+# /bashguard/** → allowed (read/write/delete go to overlay)
+# /other-repo/** → EPERM
+# /../escape → EPERM (posixpath.normpath resolves traversal first)
+```
+
+17 unit tests:
+- Read/write/create/delete inside grant: allowed ✅
+- Read/write/create/delete outside grant: EPERM ✅
+- `readdir` outside grant: EPERM (can't enumerate other agents' dirs) ✅
+- Path traversal (`/allowed/../outside`): EPERM ✅
+- 430 total tests passing ✅
+
+**Result: W3 complete. Next waypoint: token auth (W4) — `.bashguard-token` in CWD identifies agent.**
+
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 
 ```
