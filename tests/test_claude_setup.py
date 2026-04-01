@@ -1,9 +1,9 @@
 """
 Tests for bashguard claude setup command.
 
-Verifies that `bashguard claude setup` installs the PreToolUse hook
-into ~/.claude/hooks/PreToolUse.d/local/70-bashguard as a symlink
-pointing to the bundled hook script.
+Verifies that `bashguard claude setup` installs all bundled hooks into
+~/.claude/hooks/<HookType>.d/system/ as symlinks pointing to the bundled
+hook scripts.
 """
 from __future__ import annotations
 
@@ -76,13 +76,15 @@ class TestClaudeSetup:
         assert link.resolve() == HOOK_SOURCE.resolve()
 
     def test_cli_claude_setup(self, tmp_path, monkeypatch):
-        """`bashguard claude setup` via CLI returns exit 0."""
-        target_dir = tmp_path / "PreToolUse.d" / "local"
-        env = {**os.environ, "BASHGUARD_HOOKS_DIR": str(target_dir)}
+        """`bashguard claude setup` installs all 3 hooks via CLI."""
+        hooks_root = tmp_path / "hooks"
+        env = {**os.environ, "BASHGUARD_HOOKS_DIR": str(hooks_root)}
         result = subprocess.run(
             [sys.executable, "-m", "bashguard.cli", "claude", "setup"],
             capture_output=True, text=True, env=env,
             cwd=str(REPO_ROOT),
         )
         assert result.returncode == 0, f"CLI failed: {result.stderr}"
-        assert (target_dir / "70-bashguard").is_symlink()
+        assert (hooks_root / "PreToolUse.d" / "system" / "70-bashguard").is_symlink()
+        assert (hooks_root / "SessionStart.d" / "system" / "75-bashguard-mount").is_symlink()
+        assert (hooks_root / "SessionEnd.d" / "system" / "75-bashguard-unmount").is_symlink()

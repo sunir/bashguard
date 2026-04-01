@@ -226,6 +226,55 @@ This mirrors Unix directory execute-bit semantics: traverse allowed, list/read b
 is now demonstrably feasible: FUSE-T + token auth + ACL + overlay = agent-per-dir
 containment with zero kext approval, zero Recovery boot, one `brew install`.**
 
+### Colony integration — SessionStart/End hooks (2026-04-01)
+
+After W5 spike validated the FUSE sandbox, integration with the colony multi-agent
+system was designed and implemented. Coordinated with Spiral (colony orchestrator)
+via msg system to define the integration contract.
+
+**Design decisions from Spiral coordination:**
+
+- `SESSION_ID` (set by colony `common.sh` dispatcher) is used directly as the FUSE
+  token — no separate token generation needed. SESSION_ID is stable across the entire
+  SessionStart→agent-runs→SessionEnd lifecycle.
+- `FileRegistry`: file-backed JSON at `~/.bashguard/sessions.json` maps
+  `{session_id → {granted_root, mount_point, project_path, pid}}`. Survives FUSE daemon
+  restarts and is readable by both the mount and unmount hooks.
+- Overlay diff at session end: written to `.bashguard/pending/<id>.patch` and a colony
+  issue filed for human review if non-empty. Session end never blocks (fail-open).
+
+**Files added (branch `feature/colony-session-hooks`):**
+
+| File | Role |
+|---|---|
+| `spike/colony_hooks.py` | `FileRegistry`, `session_start()`, `session_end()`, `overlay_diff()` |
+| `hooks/75-bashguard-mount` | `SessionStart.d` shell plugin — mounts FUSE sandbox |
+| `hooks/75-bashguard-unmount` | `SessionEnd.d` shell plugin — unmounts and cleans up |
+| `tests/test_colony_hooks.py` | 17 unit tests covering all colony integration paths |
+
+**Hook design:**
+
+```bash
+# hooks/75-bashguard-mount (SessionStart.d)
+command -v bashguard >/dev/null 2>&1 || exit 0   # fail-open: not installed
+[ -f /usr/local/lib/libfuse.dylib ] || exit 0     # fail-open: FUSE-T not installed
+[ -z "${SESSION_ID:-}" ] && exit 0                # fail-open: no session
+exec bashguard fuse-mount --session-id "$SESSION_ID" --project "$PWD"
+
+# hooks/75-bashguard-unmount (SessionEnd.d)
+command -v bashguard >/dev/null 2>&1 || exit 0
+[ -z "${SESSION_ID:-}" ] && exit 0
+exec bashguard fuse-unmount --session-id "$SESSION_ID"
+```
+
+**`setup.py` updated** to install all 3 hooks (PreToolUse + SessionStart + SessionEnd)
+via `install_all_hooks()`. `bashguard claude setup` now provisions the full sandbox
+lifecycle, not just command auditing.
+
+**Result: Colony integration design complete. `FileRegistry` + `session_start/end` +
+`overlay_diff` implemented and tested (476 total passing). Hooks installed via
+`bashguard claude setup`.**
+
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 
 ```
