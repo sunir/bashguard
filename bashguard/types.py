@@ -243,13 +243,14 @@ class LogQuery(Document):
 
 
 class ClaudeSetup(Document):
-    """Claude Code integration — installs the PreToolUse hook plugin."""
+    """Claude Code integration — installs all bashguard hook plugins."""
 
     def do_setup(self) -> "Output":
-        """Symlink the bundled hook into ~/.claude/hooks/PreToolUse.d/local/."""
-        from bashguard.setup import install_hook
-        link = install_hook()
-        return Output(text=f"Installed: {link}")
+        """Symlink all bundled hooks into ~/.claude/hooks/<HookType>.d/system/."""
+        from bashguard.setup import install_all_hooks
+        links = install_all_hooks()
+        lines = "\n".join(f"Installed: {p}" for p in links)
+        return Output(text=lines)
 
     def __str__(self) -> str:
         return ""
