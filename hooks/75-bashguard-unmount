@@ -1,0 +1,19 @@
+#!/bin/bash
+# Plugin: bashguard (SessionEnd)
+# Story: colony-fuse-sandbox
+#
+# PURPOSE: Unmount FUSE sandbox and handle overlay changes at session end.
+#   If the overlay has uncommitted changes, writes a patch file and files
+#   a colony issue for human review before discarding.
+#
+# PROTOCOL: Informational. Never blocks session end.
+# FAIL-OPEN: If bashguard is not installed or session unknown, exits 0.
+#
+# Install: bashguard claude setup
+# Uninstall: rm ~/.claude/hooks/SessionEnd.d/system/75-bashguard-unmount
+
+command -v bashguard >/dev/null 2>&1 || exit 0
+
+[ -z "${SESSION_ID:-}" ] && exit 0
+
+exec bashguard fuse-unmount --session-id "$SESSION_ID"

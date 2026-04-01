@@ -1,49 +1,67 @@
 """
-bashguard.setup — Install bashguard as a Claude PreToolUse hook plugin.
+bashguard.setup — Install bashguard as Claude hook plugins.
 
-`bashguard claude setup` symlinks the bundled hook script into
-~/.claude/hooks/PreToolUse.d/system/70-bashguard so the colony hook
-dispatcher picks it up automatically. system/ is the policy layer (runs
-first, managed by setup.d, not in user git).
+`bashguard claude setup` symlinks bundled hook scripts into the
+~/.claude/hooks/<HookType>.d/system/ directories so the colony hook
+dispatcher picks them up automatically. system/ is the policy layer.
 
-The target directory can be overridden via BASHGUARD_HOOKS_DIR for testing.
+Hooks installed:
+  PreToolUse.d/system/70-bashguard        — bash command auditing
+  SessionStart.d/system/75-bashguard-mount  — FUSE sandbox mount on session start
+  SessionEnd.d/system/75-bashguard-unmount  — unmount + overlay diff on session end
+
+Target directories can be overridden via BASHGUARD_HOOKS_DIR for testing.
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-HOOK_NAME = "70-bashguard"
 _PACKAGE_ROOT = Path(__file__).parent.parent
-HOOK_SOURCE = _PACKAGE_ROOT / "hooks" / HOOK_NAME
+_HOOKS_DIR = _PACKAGE_ROOT / "hooks"
 
-_DEFAULT_TARGET_DIR = (
-    Path.home() / ".claude" / "hooks" / "PreToolUse.d" / "system"
-)
+_HOOK_SPECS: list[tuple[str, str]] = [
+    # (hook_filename, target_hook_type_dir)
+    ("70-bashguard",         "PreToolUse.d"),
+    ("75-bashguard-mount",   "SessionStart.d"),
+    ("75-bashguard-unmount", "SessionEnd.d"),
+]
+
+_SYSTEM_SUBDIR = "system"
 
 
-def _resolve_target_dir() -> Path:
+def _claude_hooks_root() -> Path:
     override = os.environ.get("BASHGUARD_HOOKS_DIR")
-    return Path(override) if override else _DEFAULT_TARGET_DIR
+    if override:
+        return Path(override)
+    return Path.home() / ".claude" / "hooks"
+
+
+def _symlink(source: Path, target: Path) -> Path:
+    """Symlink source → target. Idempotent, replaces stale links."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink() and target.resolve() == source.resolve():
+        return target  # Already correct.
+    if target.is_symlink() or target.exists():
+        target.unlink()
+    target.symlink_to(source)
+    return target
 
 
 def install_hook(target_dir: Path | None = None) -> Path:
-    """Symlink the bundled hook into target_dir.
-
-    Creates parent directories if needed. Replaces stale symlinks.
-    Returns the installed symlink path.
-    """
+    """Symlink the PreToolUse hook (backwards-compatible entry point)."""
     if target_dir is None:
-        target_dir = _resolve_target_dir()
+        target_dir = _claude_hooks_root() / "PreToolUse.d" / _SYSTEM_SUBDIR
+    source = _HOOKS_DIR / "70-bashguard"
+    return _symlink(source, target_dir / "70-bashguard")
 
-    target_dir.mkdir(parents=True, exist_ok=True)
-    link = target_dir / HOOK_NAME
 
-    if link.is_symlink() and link.resolve() == HOOK_SOURCE.resolve():
-        return link  # Already correct — idempotent.
-
-    if link.is_symlink() or link.exists():
-        link.unlink()
-
-    link.symlink_to(HOOK_SOURCE)
-    return link
+def install_all_hooks() -> list[Path]:
+    """Symlink all bundled hooks into their system/ dirs. Returns installed paths."""
+    root = _claude_hooks_root()
+    installed = []
+    for hook_name, hook_type_dir in _HOOK_SPECS:
+        source = _HOOKS_DIR / hook_name
+        target = root / hook_type_dir / _SYSTEM_SUBDIR / hook_name
+        installed.append(_symlink(source, target))
+    return installed

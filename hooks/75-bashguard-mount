@@ -1,0 +1,24 @@
+#!/bin/bash
+# Plugin: bashguard (SessionStart)
+# Story: colony-fuse-sandbox
+#
+# PURPOSE: Mount a FUSE shadow sandbox over the agent's CWD at session start.
+#   Uses SESSION_ID (from colony common.sh) as the agent token.
+#   The real project directory is never modified — all writes go to overlay.
+#
+# PROTOCOL: Informational. Never blocks session start.
+# FAIL-OPEN: If bashguard or FUSE-T is not installed, exits 0 silently.
+#
+# Install: bashguard claude setup
+# Uninstall: rm ~/.claude/hooks/SessionStart.d/system/75-bashguard-mount
+
+command -v bashguard >/dev/null 2>&1 || exit 0
+
+# Require FUSE-T
+[ -f /usr/local/lib/libfuse.dylib ] || exit 0
+
+# SESSION_ID is exported by colony common.sh dispatcher
+[ -z "${SESSION_ID:-}" ] && exit 0
+
+# Mount the sandbox for the current working directory
+exec bashguard fuse-mount --session-id "$SESSION_ID" --project "$PWD"
