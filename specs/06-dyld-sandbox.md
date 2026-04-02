@@ -1,8 +1,8 @@
 # Spec 06: macOS Containment Layer for AI Agents
 
-**Status:** Empirically tested — DYLD dead; hdiutil validated; macFUSE requires Recovery boot on Apple Silicon; FUSE-T identified as viable kext-less alternative
+**Status:** Empirically tested — DYLD dead; hdiutil validated; macFUSE requires Recovery boot on Apple Silicon; FUSE-T viable; seatbelt (sandbox-exec) implemented as defense-in-depth layer
 **Author:** bashguard
-**Date:** 2026-03-27, experiments run 2026-03-28, 2026-03-31
+**Date:** 2026-03-27, experiments run 2026-03-28, 2026-03-31, 2026-04-02
 
 ---
 
@@ -274,6 +274,51 @@ lifecycle, not just command auditing.
 **Result: Colony integration design complete. `FileRegistry` + `session_start/end` +
 `overlay_diff` implemented and tested (476 total passing). Hooks installed via
 `bashguard claude setup`.**
+
+### Seatbelt (sandbox-exec) — defense-in-depth layer (2026-04-02)
+
+`sandbox-exec` ships with macOS (since Snow Leopard). No install. Uses SBPL (Sandbox
+Profile Language) to deny-by-default at the kernel level. Complements FUSE:
+- FUSE captures writes (CoW overlay, real dir untouched, diff for review)
+- seatbelt blocks writes at the kernel independently (different failure mode)
+
+Combined, both layers must fail simultaneously for an unauthorized write to reach the
+real filesystem.
+
+**Profile policy (`bashguard.seatbelt.build_profile`):**
+
+```scheme
+(version 1)
+(deny default)
+(allow file-read* (subpath "/"))           ; reads anywhere — agent needs libs/tools
+(allow file-write* (subpath "/path/to/project"))  ; writes: project dir only
+(allow file-write* (subpath "/private/tmp"))       ; temp files always allowed
+(allow process-exec*)                      ; subprocesses (bash, git, uv, etc.)
+(allow signal)                             ; Ctrl-C and process signalling
+```
+
+Network is denied by default. Optional `allowed_hosts` parameter adds per-host rules:
+```scheme
+(allow network-outbound (remote tcp "api.openai.com:*"))
+```
+
+**Key implementation detail:** `/tmp` on macOS is a symlink to `/private/tmp`.
+seatbelt enforces against real paths, not symlinks. `build_profile()` calls
+`Path.resolve()` before embedding paths in SBPL — essential for correctness.
+
+**`run_sandboxed(cmd, project_path, ...)`** wraps execution: prepends
+`sandbox-exec -p <profile>` to the command. Fail-open: if `sandbox-exec`
+is not found (non-macOS, unusual installs), command runs without sandboxing.
+
+**`sandbox-exec` is "DEPRECATED" per the man page** (since macOS 10.8) but continues
+to ship and work on macOS 15. Apple's replacement (App Sandbox) requires Xcode
+entitlements and is unsuitable for CLI tools. `sandbox-exec` remains the only
+programmatic seatbelt option for non-app macOS processes.
+
+**19 tests. 495 total passing.**
+
+**Result: seatbelt layer implemented. Defense-in-depth stack is now three layers:
+rule-based audit → seatbelt kernel enforcement → FUSE CoW overlay.**
 
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 
