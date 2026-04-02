@@ -51,6 +51,29 @@ def _run_audit(script: str):
     return findings, verdict
 
 
+def _seatbelt_wrap(script: str) -> str | None:
+    """Rewrite script to run under seatbelt. Returns None if unavailable or disabled."""
+    import os
+    import shlex
+    if os.environ.get("BASHGUARD_SEATBELT") == "0":
+        return None
+    from bashguard.seatbelt import build_profile, sandbox_exec_available
+    if not sandbox_exec_available():
+        return None
+
+    project_path = Path(os.getcwd())
+    profile = build_profile(project_path=project_path)
+
+    # Write profile to a session-keyed file so it persists across the session
+    session_id = os.environ.get("SESSION_ID", "default")
+    profile_dir = Path.home() / ".bashguard" / "seatbelt"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_path = profile_dir / f"{session_id}.sb"
+    profile_path.write_text(str(profile))
+
+    return f"sandbox-exec -f {profile_path} /bin/bash -c {shlex.quote(script)}"
+
+
 def _gates_output(script: str) -> "Output":
     """Audit script and return gates-compatible Output (deny/ask/silent)."""
     _, verdict = _run_audit(script)
@@ -67,6 +90,16 @@ def _gates_output(script: str) -> "Output":
 
     log_verdict(verdict, command=script)
     if verdict.verdict == VerdictType.ALLOW:
+        wrapped = _seatbelt_wrap(script)
+        if wrapped:
+            payload = {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {"command": wrapped},
+                }
+            }
+            return Output(text=json.dumps(payload))
         return Output(text="")
     if verdict.verdict == VerdictType.BLOCK:
         payload = {"permissionDecision": "deny", "reason": verdict.message}

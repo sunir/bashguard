@@ -315,10 +315,30 @@ to ship and work on macOS 15. Apple's replacement (App Sandbox) requires Xcode
 entitlements and is unsuitable for CLI tools. `sandbox-exec` remains the only
 programmatic seatbelt option for non-app macOS processes.
 
-**19 tests. 495 total passing.**
+**Wired into hook pipeline** (`_gates_output` in `types.py`): when the audit
+returns ALLOW, the hook rewrites the command via `_seatbelt_wrap()` and returns
+`hookSpecificOutput` with `updatedInput` containing the `sandbox-exec`-wrapped
+command. Claude Code executes the rewritten command transparently.
 
-**Result: seatbelt layer implemented. Defense-in-depth stack is now three layers:
-rule-based audit → seatbelt kernel enforcement → FUSE CoW overlay.**
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "updatedInput": {
+      "command": "sandbox-exec -f ~/.bashguard/seatbelt/<session>.sb /bin/bash -c 'original cmd'"
+    }
+  }
+}
+```
+
+Opt-out: `BASHGUARD_SEATBELT=0` disables wrapping (silent allow, original behavior).
+Profile is session-keyed (`SESSION_ID` env var, fallback `"default"`).
+
+**32 tests (19 unit + 13 integration). 508 total passing.**
+
+**Result: seatbelt layer implemented and wired. Defense-in-depth stack is now three layers:
+rule-based audit → seatbelt kernel enforcement (via hook rewrite) → FUSE CoW overlay.**
 
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 
