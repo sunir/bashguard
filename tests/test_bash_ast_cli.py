@@ -63,11 +63,27 @@ def analyze(command: str) -> tuple[int, dict | str]:
         return result.returncode, result.stdout + result.stderr
 
 
+def _is_allowed(out: str) -> bool:
+    """Return True if hook output represents an ALLOW decision.
+
+    ALLOW is either empty (no seatbelt) or hookSpecificOutput with
+    permissionDecision=allow (seatbelt wrapping enabled).
+    """
+    if out == "":
+        return True
+    try:
+        data = json.loads(out)
+        hso = data.get("hookSpecificOutput", {})
+        return hso.get("permissionDecision") == "allow"
+    except (json.JSONDecodeError, AttributeError):
+        return False
+
+
 class TestHookMode:
-    def test_safe_command_is_silent(self):
+    def test_safe_command_is_allowed(self):
         code, out = hook("echo hello")
         assert code == 0
-        assert out == ""
+        assert _is_allowed(out), f"Expected allow, got: {out!r}"
 
     def test_blocked_command_exits_0(self):
         # hook mode always exits 0 — gates reads stdout JSON
@@ -98,7 +114,7 @@ class TestHookMode:
     def test_git_push_feature_branch_allowed(self):
         code, out = hook("git push origin feature/my-branch")
         assert code == 0
-        assert out == ""  # silent = allow
+        assert _is_allowed(out), f"Expected allow, got: {out!r}"
 
 
 class TestAnalyzeMode:
