@@ -90,13 +90,16 @@ def _gates_output(script: str) -> "Output":
 
     log_verdict(verdict, command=script)
     if verdict.verdict == VerdictType.ALLOW:
-        wrapped = _seatbelt_wrap(script)
-        if wrapped:
+        from bashguard.credentials import load_and_substitute
+        rewritten = load_and_substitute(script)
+        wrapped = _seatbelt_wrap(rewritten)
+        final = wrapped or rewritten
+        if final != script:
             payload = {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "allow",
-                    "updatedInput": {"command": wrapped},
+                    "updatedInput": {"command": final},
                 }
             }
             return Output(text=json.dumps(payload))
