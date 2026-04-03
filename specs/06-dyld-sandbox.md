@@ -1,8 +1,8 @@
 # Spec 06: macOS Containment Layer for AI Agents
 
-**Status:** Empirically tested — DYLD dead; hdiutil validated; macFUSE requires Recovery boot on Apple Silicon; FUSE-T viable; seatbelt (sandbox-exec) implemented as defense-in-depth layer
+**Status:** IMPLEMENTED — DYLD dead; FUSE-T shadow FS (W3-W5 complete); seatbelt + credential injection; hook enforcement fixed (exit code 2 bug)
 **Author:** bashguard
-**Date:** 2026-03-27, experiments run 2026-03-28, 2026-03-31, 2026-04-02
+**Date:** 2026-03-27, experiments 2026-03-28, 2026-03-31, 2026-04-02, hook fix 2026-04-03
 
 ---
 
@@ -339,6 +339,48 @@ Profile is session-keyed (`SESSION_ID` env var, fallback `"default"`).
 
 **Result: seatbelt layer implemented and wired. Defense-in-depth stack is now three layers:
 rule-based audit → seatbelt kernel enforcement (via hook rewrite) → FUSE CoW overlay.**
+
+### Hook exit code protocol — colony dispatcher (2026-04-03)
+
+**Critical bug discovered:** The colony PreToolUse dispatcher (`~/.claude/hooks/PreToolUse`)
+uses **exit code 2** to signal block — NOT stdout JSON. Every blocked command was executing
+despite bashguard returning `{"permissionDecision": "deny"}`.
+
+**Root cause:** The dispatcher does:
+```bash
+OUTPUT=$(echo "$INPUT" | "$plugin" 2>&1)
+EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 2 ]]; then
+    echo "$OUTPUT" >&2
+    exit 2
+fi
+```
+It captures plugin stdout into `$OUTPUT`. On exit 2, echoes to stderr and exits 2 (block).
+On exit 0, discards `$OUTPUT` entirely. bashguard was always exiting 0 — deny JSON was
+captured and thrown away. Claude Code never saw the deny.
+
+**Fix (2026-04-03):** `cli.py` now captures its own stdout after `grammar.interpret_argv()`,
+parses the JSON, and returns exit code 2 when `permissionDecision == "deny"`.
+
+```python
+buf = io.StringIO()
+sys.stdout = buf
+grammar.interpret_argv(sys.argv[1:])
+sys.stdout = old_stdout
+output = buf.getvalue()
+sys.stdout.write(output)
+data = json.loads(output)
+if data.get("permissionDecision") == "deny":
+    return 2   # colony dispatcher sees this and blocks the tool
+```
+
+**Verify:** `echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | bashguard hook; echo "EXIT:$?"` → `EXIT:2`
+
+**525 tests passing. Hook enforcement is now active.**
+
+**Colony-wide distribution:** `~/source/colony/system/claude/hooks/PreToolUse.d/system/70-bashguard`
+added (2026-04-03). Distributed to all repos via `colony c`. Global hook also at
+`~/.claude/hooks/PreToolUse.d/system/70-bashguard` → symlink to production binary.
 
 ### macFUSE System Extension on Apple Silicon (2026-03-31)
 
