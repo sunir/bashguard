@@ -11,7 +11,9 @@ Story: As a Claude Code hook author, I need bash-ast to:
 Success criteria (hook mode):
 - `echo HOOK_JSON | bash-ast hook` → silent (empty) for safe commands
 - `echo HOOK_JSON | bash-ast hook` → {"permissionDecision": "deny", ...} for blocked
-- All hook mode outputs exit 0 (gates reads stdout JSON, not exit code)
+- ALLOW commands exit 0; BLOCK commands exit 2 (colony dispatcher uses exit code, not JSON)
+- The colony PreToolUse dispatcher captures stdout and only forwards it when exit code == 2,
+  so Claude Code sees the block via exit code, not JSON stdout.
 
 Success criteria (analyze mode):
 - `bash-ast analyze --command 'echo hello'` → JSON with empty violations
@@ -85,10 +87,10 @@ class TestHookMode:
         assert code == 0
         assert _is_allowed(out), f"Expected allow, got: {out!r}"
 
-    def test_blocked_command_exits_0(self):
-        # hook mode always exits 0 — gates reads stdout JSON
+    def test_blocked_command_exits_2(self):
+        # hook mode exits 2 on BLOCK — colony dispatcher uses exit code to block, not JSON
         code, out = hook("rm -rf /")
-        assert code == 0
+        assert code == 2
 
     def test_blocked_command_outputs_deny(self):
         code, out = hook("rm -rf /")

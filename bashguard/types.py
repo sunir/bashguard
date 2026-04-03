@@ -106,7 +106,7 @@ def _gates_output(script: str) -> "Output":
         return Output(text="")
     if verdict.verdict == VerdictType.BLOCK:
         payload = {"permissionDecision": "deny", "reason": verdict.message}
-        return Output(text=json.dumps(payload))
+        return Output(text=json.dumps(payload), exit_code=2)
     if verdict.verdict == VerdictType.CONFIRM:
         reason = verdict.confirmation_prompt or verdict.message
         payload = {"permissionDecision": "ask", "reason": reason}
@@ -295,8 +295,9 @@ class ClaudeSetup(Document):
 class Output(BaseOutput):
     """Terminal output — str() is written to stdout by @output."""
 
-    def __init__(self, text: str = "", **kwargs):
+    def __init__(self, text: str = "", exit_code: int = 0, **kwargs):
         self.text = text
+        self.exit_code = exit_code
 
     def __str__(self) -> str:
         return self.text

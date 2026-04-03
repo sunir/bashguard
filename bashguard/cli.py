@@ -35,9 +35,29 @@ _TYPES = {
 
 
 def main() -> int:
+    import io
+    import json as _json
     try:
         grammar = DataGrammar(grammar=str(_GRAMMAR), types=_TYPES)
-        grammar.interpret_argv(sys.argv[1:])
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            grammar.interpret_argv(sys.argv[1:])
+        finally:
+            sys.stdout = old_stdout
+        output = buf.getvalue()
+        sys.stdout.write(output)
+
+        # Colony PreToolUse dispatcher uses exit code 2 to block — JSON deny alone is swallowed.
+        # Detect deny verdict from output to return the correct exit code.
+        if output.strip():
+            try:
+                data = _json.loads(output)
+                if data.get("permissionDecision") == "deny":
+                    return 2
+            except (_json.JSONDecodeError, AttributeError):
+                pass
         return 0
 
     except (ParseError, UserError) as e:
