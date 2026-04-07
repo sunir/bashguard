@@ -1,96 +1,98 @@
 # bashguard
 
-Bash command security interceptor for LLM agent sandboxing. Parses commands into ASTs via tree-sitter, runs pluggable security rules, returns structured verdicts (ALLOW/BLOCK/CONFIRM/REDIRECT).
+**AI agents that don't blow up your laptop.**
 
-## Architecture
+bashguard intercepts every bash command Claude Code runs, audits it against a rule set, and either blocks it, wraps it in a kernel sandbox, or lets it through. Your files stay yours.
 
-Three-stage pipeline — detection orthogonal to response:
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-```
-bash string → parse() → audit() → decide() → Verdict
-              [CST]     [Findings]            [ALLOW/BLOCK/CONFIRM/REDIRECT]
-```
+---
 
-## Install
+## Quick start
 
 ```bash
-uv pip install -e ".[dev]"
+pip install bashguard
+bashguard claude setup      # installs the PreToolUse hook into Claude Code
 ```
 
-## Usage
+That's it. Every bash command Claude runs now goes through bashguard before it executes.
 
-### Hook mode (Claude Code integration)
+---
+
+## What it does
+
+```
+bash string → parse (tree-sitter AST)
+            → audit (security rules → Findings)
+            → decide (Findings → Verdict)
+            → ALLOW: wrap in sandbox-exec, substitute credentials
+              BLOCK: deny with reason
+              CONFIRM: ask
+```
+
+**On ALLOW**, the command runs inside `sandbox-exec` — a deny-default macOS kernel sandbox that restricts writes to your project directory. Your home directory is safe even if the audit misses something.
+
+**On BLOCK**, Claude Code sees a deny and never executes the command.
+
+---
+
+## What gets blocked
+
+| Rule | Blocks |
+|------|--------|
+| `destructive.irreversible` | `rm -rf`, `dd`, `mkfs`, `shred` |
+| `credentials.privileged_path` | reads from `~/.ssh`, `~/.aws`, `.env` |
+| `network.unknown_host` | `curl`/`wget` to hosts not in your allowlist |
+| `git.destructive` | force push, `reset --hard`, `branch -D` |
+| `paths.protected_write` | writes to `/etc`, `/usr`, `/sys`, `/boot` |
+| `content.secret_in_args` | API keys, PEM headers in command arguments |
+| `content.exfiltration_pattern` | sensitive files piped to network endpoints |
+| `evasion.*` (13 rules) | `eval`, shell-in-shell, base64 decode pipelines, IFS manipulation |
+| `self_protection.*` | attempts to modify bashguard itself |
+| `comms.*` | email, SMS, Slack/Discord webhooks |
+| `sql_destruction.*` | `DROP DATABASE`, `TRUNCATE`, bulk deletes |
+| `crypto_mining.*` | xmrig and friends |
+| `tunneling.*` | ngrok, localtunnel, serveo |
+
+---
+
+## Credential injection
+
+Keep secrets out of Claude's context entirely. Put placeholders in your prompts:
 
 ```bash
-echo "$CLAUDE_HOOK_INPUT" | bashguard hook
+curl -H "Authorization: Bearer {{GITHUB_TOKEN}}" https://api.github.com/...
 ```
 
-### Analyze mode (debugging)
+bashguard substitutes real values from `~/.bashguard/credentials.yaml` at execution time. Claude never sees the actual token.
+
+---
+
+## Audit log
 
 ```bash
-bashguard analyze --command 'git push --force origin main'
+bashguard log --verdict block -n 20          # recent blocks
+bashguard log --rule network.unknown_host    # by rule
+bashguard stats --days 7                     # weekly summary
 ```
 
-### Audit log
-
-```bash
-bashguard log --verdict block --rule network.unknown_host -n 20 --json
-bashguard stats --days 7
-```
-
-## Rules (342 tests, 70 corpus entries)
-
-| Rule | Detects | ActionType |
-|------|---------|------------|
-| `parse.error_node` | malformed/obfuscated commands | OBFUSCATED |
-| `credentials.privileged_path` | ~/.ssh, ~/.aws, /etc, .env | CREDENTIAL_ACCESS |
-| `network.unknown_host` | curl/wget/nc to unknown hosts | NETWORK_OUTBOUND |
-| `network.dev_tcp` | /dev/tcp bash trick | NETWORK_OUTBOUND |
-| `destructive.irreversible` | rm -rf, dd, mkfs, shred | FILESYSTEM_DELETE |
-| `package_install.global` | brew/apt/npm -g | PACKAGE_INSTALL |
-| `git.destructive` | force push, reset --hard, branch -D | GIT_DESTRUCTIVE |
-| `paths.protected_write` | write redirects to /etc /usr /sys | SYSTEM_CONFIG |
-| `content.secret_in_args` | API keys/PEM/tokens in args | CREDENTIAL_ACCESS |
-| `content.exfiltration_pattern` | sensitive files piped to network | NETWORK_OUTBOUND |
-| `content.outside_boundary` | file access outside worktree | FILESYSTEM_READ |
-| `self_protection.*` | attempts to modify bashguard itself | SYSTEM_CONFIG |
-| `comms.*` | email/SMS/webhook sending | NETWORK_OUTBOUND |
-| 13 `evasion.*` rules | eval, shell-in-shell, decode pipelines, IFS, etc. | OBFUSCATED/ENV_MUTATION |
-
-### Strict mode (opt-in)
-
-Allowlist-only: blocks any command not in the safe vocabulary. Not registered by default.
-
-```python
-from bashguard.strict_mode import StrictModeRule
-```
+---
 
 ## Configuration
 
-### `.bashguard.yaml` (project-local, ratcheting)
-
-Can only tighten policy (allow→block), never relax (block→allow):
+Per-project policy in `.bashguard.yaml`. Ratcheting: can only tighten (allow→block), never relax (block→allow):
 
 ```yaml
 policy:
   severity:
     medium: block
-rules:
-  - rule_id: git.destructive
-    verdict: block
 context:
   allowed_hosts:
+    - api.openai.com
     - internal.corp.com
 ```
 
-### LLM fallback (opt-in)
-
-Optional LLM second opinion for CONFIRM verdicts:
-
-```bash
-export BASHGUARD_LLM_FALLBACK=1
-export BASHGUARD_LLM_KEY=sk-...
-```
+---
 
 ## Python API
 
@@ -102,10 +104,40 @@ from bashguard.policy import PolicyConfig, decide
 ctx = make_context()
 findings = audit("rm -rf /", ctx)
 verdict = decide(findings, ctx, PolicyConfig.default())
+# Verdict(verdict=BLOCK, message="rm -rf on non-/tmp path: /")
 ```
+
+---
+
+## Debug mode
+
+```bash
+bashguard analyze --command 'git push --force origin main'
+```
+
+Returns full JSON: parsed commands, all findings, verdict, reason.
+
+---
+
+## Disable seatbelt
+
+The kernel sandbox wraps allowed commands by default. To disable:
+
+```bash
+BASHGUARD_SEATBELT=0 bashguard hook
+```
+
+---
 
 ## Tests
 
 ```bash
-.venv/bin/pytest tests/ -q
+pip install -e ".[dev]"
+pytest tests/ -q        # 525 tests
 ```
+
+---
+
+## License
+
+MIT
