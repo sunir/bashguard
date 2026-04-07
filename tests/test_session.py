@@ -238,3 +238,98 @@ class TestSessionList:
             manager.stop(session.session_id)
 
         assert manager.list_sessions() == []
+
+
+# ---------------------------------------------------------------------------
+# Fork (checkpoint before risky operation)
+# ---------------------------------------------------------------------------
+
+class TestSessionFork:
+    def test_fork_records_checkpoint(self, manager: SessionManager, project_dir: Path):
+        with patch("session.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock(pid=1234)
+            session = manager.start(project_dir)
+
+        manager.fork(session.session_id, label="before big refactor")
+
+        reloaded = manager.get(session.session_id)
+        assert len(reloaded.checkpoints) == 1
+        assert reloaded.checkpoints[0]["label"] == "before big refactor"
+        assert "time" in reloaded.checkpoints[0]
+
+    def test_fork_without_label(self, manager: SessionManager, project_dir: Path):
+        with patch("session.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock(pid=1234)
+            session = manager.start(project_dir)
+
+        manager.fork(session.session_id)
+
+        reloaded = manager.get(session.session_id)
+        assert len(reloaded.checkpoints) == 1
+        assert reloaded.checkpoints[0]["label"] == "checkpoint-1"
+
+    def test_fork_multiple_checkpoints(self, manager: SessionManager, project_dir: Path):
+        with patch("session.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock(pid=1234)
+            session = manager.start(project_dir)
+
+        manager.fork(session.session_id, label="step-1")
+        manager.fork(session.session_id, label="step-2")
+
+        reloaded = manager.get(session.session_id)
+        assert len(reloaded.checkpoints) == 2
+        assert reloaded.checkpoints[1]["label"] == "step-2"
+
+    def test_fork_unknown_session_raises(self, manager: SessionManager):
+        with pytest.raises(KeyError):
+            manager.fork("nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# Status
+# ---------------------------------------------------------------------------
+
+class TestSessionStatus:
+    def test_status_returns_dict(self, manager: SessionManager, project_dir: Path):
+        with patch("session.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock(pid=1234)
+            session = manager.start(project_dir)
+
+        status = manager.status(session.session_id)
+        assert status["session_id"] == session.session_id
+        assert status["project_path"] == str(project_dir)
+        assert status["state"] == "active"
+        assert "checkpoints" in status
+
+    def test_status_with_checkpoints(self, manager: SessionManager, project_dir: Path):
+        with patch("session.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock(pid=1234)
+            session = manager.start(project_dir)
+
+        manager.fork(session.session_id, label="before-migration")
+        status = manager.status(session.session_id)
+        assert len(status["checkpoints"]) == 1
+
+    def test_status_unknown_session_raises(self, manager: SessionManager):
+        with pytest.raises(KeyError):
+            manager.status("nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# Sync (overlay diff)
+# ---------------------------------------------------------------------------
+
+class TestSessionSync:
+    def test_sync_returns_diff_path(self, manager: SessionManager, project_dir: Path):
+        with patch("session.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock(pid=1234)
+            session = manager.start(project_dir)
+
+        result = manager.sync_plan(session.session_id)
+        assert result["session_id"] == session.session_id
+        assert result["real_root"] == str(project_dir)
+        assert result["mount_point"] == session.mount_point
+
+    def test_sync_unknown_session_raises(self, manager: SessionManager):
+        with pytest.raises(KeyError):
+            manager.sync_plan("nonexistent")
