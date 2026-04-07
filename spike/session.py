@@ -39,7 +39,7 @@ import os
 import secrets
 import subprocess
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 _SPIKE_DIR = Path(__file__).parent
@@ -57,6 +57,7 @@ class SessionState:
     granted_root: str
     mount_point: str
     pid: int
+    checkpoints: list = field(default_factory=list)
 
     def save(self, path: Path) -> None:
         path.write_text(json.dumps(asdict(self), indent=2))
@@ -156,6 +157,58 @@ class SessionManager:
         # Remove state
         state_file.unlink()
 
+
+    def get(self, session_id: str) -> SessionState:
+        """Load a session by ID."""
+        state_file = self.sessions_dir / f"{session_id}.json"
+        if not state_file.exists():
+            raise KeyError(f"no session with id {session_id!r}")
+        return SessionState.load(state_file)
+
+    def fork(self, session_id: str, label: str | None = None) -> SessionState:
+        """Record a checkpoint in the session. Revert = stop (discards overlay)."""
+        import datetime
+        state = self.get(session_id)
+        n = len(state.checkpoints) + 1
+        checkpoint = {
+            "label": label or f"checkpoint-{n}",
+            "time": datetime.datetime.utcnow().isoformat() + "Z",
+            "n": n,
+        }
+        state.checkpoints.append(checkpoint)
+        state.save(self.sessions_dir / f"{session_id}.json")
+        return state
+
+    def status(self, session_id: str) -> dict:
+        """Human-readable session status."""
+        state = self.get(session_id)
+        return {
+            "session_id": state.session_id,
+            "project_path": state.project_path,
+            "mount_point": state.mount_point,
+            "work_dir": state.work_dir,
+            "state": "active",
+            "checkpoints": state.checkpoints,
+            "pid": state.pid,
+        }
+
+    def sync_plan(self, session_id: str) -> dict:
+        """Return info needed to sync overlay back to real dir.
+
+        Actual diff requires the FUSE daemon to flush its overlay to disk.
+        This returns the paths — use 'diff -r <real_root> <mount_point>' to see changes,
+        then 'rsync -a <mount_point>/<granted_root>/ <real_root>/' to commit.
+        """
+        state = self.get(session_id)
+        return {
+            "session_id": state.session_id,
+            "real_root": state.project_path,
+            "mount_point": state.mount_point,
+            "work_dir": state.work_dir,
+            "diff_cmd": f"diff -r {state.project_path} {state.work_dir}",
+            "sync_cmd": f"rsync -a {state.work_dir}/ {state.project_path}/",
+        }
+
     def list_sessions(self) -> list[SessionState]:
         """Return all active sessions."""
         sessions = []
@@ -183,10 +236,20 @@ def main():
     p_start = sub.add_parser("start", help="Start a sandbox session")
     p_start.add_argument("--project", required=True, help="Project directory to sandbox")
 
-    p_stop = sub.add_parser("stop", help="Stop a session")
+    p_stop = sub.add_parser("stop", help="Stop a session (discards overlay)")
     p_stop.add_argument("session_id", help="Session ID to stop")
 
     sub.add_parser("list", help="List active sessions")
+
+    p_fork = sub.add_parser("fork", help="Checkpoint before a risky operation")
+    p_fork.add_argument("session_id", help="Session ID")
+    p_fork.add_argument("--label", help="Checkpoint label", default=None)
+
+    p_status = sub.add_parser("status", help="Show session status")
+    p_status.add_argument("session_id", help="Session ID")
+
+    p_sync = sub.add_parser("sync", help="Show how to commit overlay to real directory")
+    p_sync.add_argument("session_id", help="Session ID")
 
     args = parser.parse_args()
     manager = SessionManager()
@@ -215,6 +278,49 @@ def main():
             print("No active sessions.")
         for s in sessions:
             print(f"  {s.session_id}  {s.project_path}  →  {s.work_dir}")
+
+    elif args.cmd == "fork":
+        try:
+            state = manager.fork(args.session_id, label=args.label)
+            cp = state.checkpoints[-1]
+            print(f"Checkpoint recorded: {cp['label']!r} at {cp['time']}")
+            print(f"  To revert: bashguard-session stop {args.session_id}  (discards all changes)")
+        except KeyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.cmd == "status":
+        try:
+            info = manager.status(args.session_id)
+            print(f"Session:     {info['session_id']}")
+            print(f"Project:     {info['project_path']}")
+            print(f"State:       {info['state']} — writes captured, real directory untouched")
+            print(f"Work dir:    {info['work_dir']}")
+            if info["checkpoints"]:
+                print(f"Checkpoints: {len(info['checkpoints'])}")
+                for cp in info["checkpoints"]:
+                    print(f"  [{cp['n']}] {cp['label']}  ({cp['time']})")
+            else:
+                print("Checkpoints: none")
+        except KeyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.cmd == "sync":
+        try:
+            plan = manager.sync_plan(args.session_id)
+            print(f"Overlay sync plan for session {plan['session_id']}:")
+            print(f"  Real dir:    {plan['real_root']}")
+            print(f"  Overlay dir: {plan['work_dir']}")
+            print()
+            print(f"  Preview changes:")
+            print(f"    {plan['diff_cmd']}")
+            print()
+            print(f"  Commit to real directory:")
+            print(f"    {plan['sync_cmd']}")
+        except KeyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
     else:
         parser.print_help()
