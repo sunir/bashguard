@@ -206,3 +206,42 @@ class AnsiCEscapeRule:
                     message=self.description,
                     matched_text=stripped,
                 )
+
+
+# ─── Shellshock-style env injection (spec 04-evasions.md pattern 6.5) ────────
+
+# () { in a quoted string value — CVE-2014-6271 pattern
+# Matches: x='() { :;}; ...' or env x='() { ...' or export BASH_FUNC_*='() { ...'
+# Variable assignment or env variable value context
+_SHELLSHOCK_IN_VALUE_RE = _re.compile(
+    r"""(?:^|\s)\w+=(['"])?\(\)\s*\{""",
+    _re.MULTILINE,
+)
+
+
+@register
+class ShellshockRule:
+    rule_id = "evasion.shellshock"
+    severity = Severity.CRITICAL
+    description = "Shellshock-style () { function injection in env variable value (CVE-2014-6271)"
+
+    def check(self, script: str, context: ExecutionContext) -> list[Finding]:
+        try:
+            return list(self._scan(script))
+        except Exception:
+            _log.exception("shellshock rule error")
+            return []
+
+    def _scan(self, script: str):
+        for line in script.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if _SHELLSHOCK_IN_VALUE_RE.search(stripped):
+                yield Finding(
+                    rule_id=self.rule_id,
+                    severity=self.severity,
+                    action_type=ActionType.OBFUSCATED,
+                    message=self.description,
+                    matched_text=stripped,
+                )
