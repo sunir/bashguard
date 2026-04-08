@@ -18,10 +18,21 @@
 - Credential injection integrated into hook pipeline
 - Hook exit code 2 fix — enforcement now real
 - Colony-wide distribution via system hooks
-- **682 tests** (as of 2026-04-08)
-- **10 new rules** from 82-incident AI agent threat database
+- **770 tests** (as of 2026-04-09)
+- **14 new rules** from 82-incident AI agent threat database + spec 04 audit
+- Spec 04 (51 evasion patterns): **fully covered** (evasion_gaps.py)
 - Corpus covers: Mythos incidents, CVE-2025-54794, Vertex AI ModeLeak,
   McKinsey red team, LiteLLM supply chain, RSA 2026 agent swarm
+
+## Rules from evasion_gaps.py (this session)
+
+- **`evasion.function_shadow`** — cd() { rm -rf "$1"; } shadows trusted builtins
+- **`evasion.path_traversal`** — /usr/bin/../bin/rm bypasses path-based allowlists
+- **`evasion.xargs_shell`** — echo ... | xargs bash -c (indirect pipe_to_shell)
+- **`evasion.ansi_c_escape`** — $'\x2f...' hex/octal ANSI-C argument obfuscation
+- **`evasion.shellshock`** — CVE-2014-6271: () { in variable values
+- **`evasion.heredoc_interpreter`** — heredoc/herestring body to bash/python3/etc
+- **`evasion.glob_command_name`** — /???/bin/ba* bypasses allowlist string matching
 
 ## Potential Next Work (when user directs)
 
@@ -29,7 +40,7 @@
 - **`.deploy/` gitignore cleanup**: Minor — a warning appears on each deploy.
 - **FUSE layer integration with real Claude sessions**: The spike code works, but wiring the session mount/unmount into actual Claude Code sessions needs end-to-end testing.
 - **Colony/system hooks distribution testing**: Verify `colony c` actually picks up the new 70-bashguard from colony/system and distributes it correctly.
-- **Corpus testing against real attack scripts**: DONE (2026-04-08). 92 corpus entries, all passing. New rules also registered in load_all_rules() — they were implemented but not wired in.
+- **Spec 04 evasion audit**: DONE (2026-04-09). All 51 patterns covered. 7 new rules in evasion_gaps.py. 106 corpus entries.
 - **RISK_POINTS scoring system**: The incident database analysis suggests a risk scoring layer above individual rules — some combinations of findings indicate higher risk than individual verdicts.
 
 ## What Sunir Cares About
