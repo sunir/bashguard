@@ -29,7 +29,7 @@
 - **`.deploy/` gitignore cleanup**: Minor — a warning appears on each deploy.
 - **FUSE layer integration with real Claude sessions**: The spike code works, but wiring the session mount/unmount into actual Claude Code sessions needs end-to-end testing.
 - **Colony/system hooks distribution testing**: Verify `colony c` actually picks up the new 70-bashguard from colony/system and distributes it correctly.
-- **Corpus testing against real attack scripts**: Run the known-dangerous corpus against all new rules to verify no false negatives. The corpus is in `tests/` but new rules may need new corpus entries.
+- **Corpus testing against real attack scripts**: DONE (2026-04-08). 92 corpus entries, all passing. New rules also registered in load_all_rules() — they were implemented but not wired in.
 - **RISK_POINTS scoring system**: The incident database analysis suggests a risk scoring layer above individual rules — some combinations of findings indicate higher risk than individual verdicts.
 
 ## What Sunir Cares About
