@@ -547,3 +547,15 @@
   description: xargs bridges stdin to bash execution (indirect pipe_to_shell)
   expected_rules: [evasion.xargs_shell]
   expected_verdict: block
+
+# ─── ANSI-C ESCAPE OBFUSCATION (spec 04-evasions.md pattern 3.4) ─────────────
+
+- command: "cat $'\\x2f\\x65\\x74\\x63\\x2f\\x70\\x61\\x73\\x73\\x77\\x64'"
+  description: Hex-encoded /etc/passwd path hides destination from static analysis
+  expected_rules: [evasion.ansi_c_escape]
+  expected_verdict: block
+
+- command: "rm $'\\057\\145\\164\\143\\057\\160\\141\\163\\163\\167\\144'"
+  description: Octal-encoded /etc/passwd — same technique with octal escapes
+  expected_rules: [evasion.ansi_c_escape]
+  expected_verdict: block

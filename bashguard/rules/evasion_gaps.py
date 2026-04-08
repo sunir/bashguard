@@ -167,3 +167,42 @@ class XargsShellRule:
                         matched_text=f"xargs ... {arg} -c",
                     )
                     break
+
+
+# ─── ANSI-C escape obfuscation (spec 04-evasions.md pattern 3.4) ─────────────
+
+import re as _re
+
+# $'\x..' or $'\0..' — hex and octal encoded strings
+# Allow common whitespace: \n \t \r \a \b \f \v (single letter after \)
+# Flag: \x followed by hex digits, \0 followed by octal digits, \NNN (octal)
+_ANSI_C_HEX_RE = _re.compile(r"\$'[^']*\\x[0-9a-fA-F]{2}[^']*'")
+_ANSI_C_OCT_RE = _re.compile(r"\$'[^']*\\[0-7]{3}[^']*'")
+
+
+@register
+class AnsiCEscapeRule:
+    rule_id = "evasion.ansi_c_escape"
+    severity = Severity.HIGH
+    description = "ANSI-C $'\\x..' escape hides actual string value from static analysis"
+
+    def check(self, script: str, context: ExecutionContext) -> list[Finding]:
+        try:
+            return list(self._scan(script))
+        except Exception:
+            _log.exception("ansi_c_escape rule error")
+            return []
+
+    def _scan(self, script: str):
+        for line in script.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if _ANSI_C_HEX_RE.search(stripped) or _ANSI_C_OCT_RE.search(stripped):
+                yield Finding(
+                    rule_id=self.rule_id,
+                    severity=self.severity,
+                    action_type=ActionType.OBFUSCATED,
+                    message=self.description,
+                    matched_text=stripped,
+                )
