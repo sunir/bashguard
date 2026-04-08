@@ -1,8 +1,8 @@
 # bashguard — Focus
 
-## Current Status (after session 1, 2026-04-03)
+## Current Status (after session 2, 2026-04-09)
 
-**Hook enforcement: WORKING.** Exit code 2 on BLOCK. Colony dispatcher respects it. 525 tests passing.
+**Hook enforcement: WORKING.** Exit code 2 on BLOCK. Colony dispatcher respects it. 795 tests passing.
 
 **Defense stack: COMPLETE.**
 - Layer 1: Rule audit (semantic detection)
@@ -18,8 +18,8 @@
 - Credential injection integrated into hook pipeline
 - Hook exit code 2 fix — enforcement now real
 - Colony-wide distribution via system hooks
-- **770 tests** (as of 2026-04-09)
-- **14 new rules** from 82-incident AI agent threat database + spec 04 audit
+- **795 tests** (as of 2026-04-09)
+- **17 new rules** from 82-incident AI agent threat database + spec 04 audit
 - Spec 04 (51 evasion patterns): **fully covered** (evasion_gaps.py)
 - Corpus covers: Mythos incidents, CVE-2025-54794, Vertex AI ModeLeak,
   McKinsey red team, LiteLLM supply chain, RSA 2026 agent swarm
@@ -33,6 +33,17 @@
 - **`evasion.shellshock`** — CVE-2014-6271: () { in variable values
 - **`evasion.heredoc_interpreter`** — heredoc/herestring body to bash/python3/etc
 - **`evasion.glob_command_name`** — /???/bin/ba* bypasses allowlist string matching
+
+## Rules from persistence_privesc.py (this session)
+
+- **`evasion.anti_forensics`** — history -c, HISTFILE=/dev/null cover agent tracks
+- **`persistence.cron_install`** — crontab - stdin installs persistent cron jobs
+- **`privesc.sudo_shell`** — sudo/pkexec + shell interpreter = root shell
+
+## False positive fixes (this session)
+
+- **`paths.protected_write`**: /dev/null, /dev/stdin, /dev/stdout, /dev/stderr now allowed
+- **`content.outside_boundary`**: `.bashguard.yaml` `trusted_paths` key for cross-repo access
 
 ## Potential Next Work (when user directs)
 
