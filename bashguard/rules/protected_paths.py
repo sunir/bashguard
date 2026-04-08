@@ -35,12 +35,17 @@ _PROTECTED_WRITE_PREFIXES = (
 _PROTECTED_WRITE_ROOTS = {"/etc", "/usr", "/sys", "/proc",
                            "/boot", "/bin", "/sbin", "/lib", "/lib64", "/dev"}
 
+# /dev pseudo-devices used for I/O plumbing — not actual device writes
+_SAFE_DEV_PATHS = {"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"}
+
 # tree-sitter node types that represent write operators
 _WRITE_OPERATORS = {">", ">>"}
 
 
 def _is_protected_write(path: str) -> bool:
     clean = path.strip("'\"")
+    if clean in _SAFE_DEV_PATHS:
+        return False
     if clean in _PROTECTED_WRITE_ROOTS:
         return True
     return any(clean.startswith(p) for p in _PROTECTED_WRITE_PREFIXES)
