@@ -127,3 +127,43 @@ class TestPathTraversal:
 
     def test_unrelated_allowed(self, ctx):
         assert _traversal_rule().check("git log --oneline", ctx) == []
+
+
+# ─── xargs to shell (spec 04-evasions.md pattern 4.6) ────────────────────────
+
+def _xargs_rule():
+    from bashguard.rules.evasion_gaps import XargsShellRule
+    return XargsShellRule()
+
+
+class TestXargsShell:
+    """
+    Story (xargs_shell): xargs bridges stdin to shell execution.
+      echo 'rm -rf /' | xargs -I {} bash -c "{}"
+    pipe_to_shell only catches pipelines ending directly with a shell interpreter.
+    xargs in the middle is an indirect delivery mechanism that wasn't caught.
+
+    Rule: flag xargs when a shell interpreter appears in its arguments.
+    """
+    def test_xargs_bash_c_blocked(self, ctx):
+        findings = _xargs_rule().check('echo "rm -rf /" | xargs -I {} bash -c "{}"', ctx)
+        assert len(findings) == 1
+        assert findings[0].rule_id == "evasion.xargs_shell"
+        assert findings[0].severity == Severity.CRITICAL
+
+    def test_xargs_sh_c_blocked(self, ctx):
+        findings = _xargs_rule().check("cat cmds.txt | xargs -I CMD sh -c CMD", ctx)
+        assert len(findings) == 1
+
+    def test_xargs_exec_shell_blocked(self, ctx):
+        findings = _xargs_rule().check("cat list.txt | xargs -n1 bash -c", ctx)
+        assert len(findings) == 1
+
+    def test_xargs_plain_cmd_allowed(self, ctx):
+        assert _xargs_rule().check("find . -name '*.py' | xargs rm -f", ctx) == []
+
+    def test_xargs_grep_allowed(self, ctx):
+        assert _xargs_rule().check("echo file.txt | xargs grep TODO", ctx) == []
+
+    def test_unrelated_allowed(self, ctx):
+        assert _xargs_rule().check("git status", ctx) == []

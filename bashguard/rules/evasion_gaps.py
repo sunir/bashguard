@@ -129,3 +129,41 @@ class PathTraversalRule:
                     message=self.description,
                     matched_text=cmd.name,
                 )
+
+
+# ─── xargs shell (spec 04-evasions.md pattern 4.6) ───────────────────────────
+
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+
+
+@register
+class XargsShellRule:
+    rule_id = "evasion.xargs_shell"
+    severity = Severity.CRITICAL
+    description = "xargs delivers stdin to a shell interpreter — indirect pipe_to_shell"
+
+    def check(self, script: str, context: ExecutionContext) -> list[Finding]:
+        try:
+            return list(self._scan(script))
+        except Exception:
+            _log.exception("xargs_shell rule error")
+            return []
+
+    def _scan(self, script: str):
+        if not script.strip():
+            return
+        cmds = parse(script)
+        for cmd in cmds:
+            if cmd.name != "xargs":
+                continue
+            # Check if any arg is a shell interpreter
+            for arg in cmd.args:
+                if arg in _SHELLS:
+                    yield Finding(
+                        rule_id=self.rule_id,
+                        severity=self.severity,
+                        action_type=ActionType.OBFUSCATED,
+                        message=self.description,
+                        matched_text=f"xargs ... {arg} -c",
+                    )
+                    break
