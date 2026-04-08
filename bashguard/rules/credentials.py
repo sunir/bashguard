@@ -30,6 +30,21 @@ _PROTECTED_DIRS = (
     "~/.config/google-chrome",
     "~/.mozilla/firefox",
     "~/Library/Application Support/Firefox",
+    # IDE settings — developers paste API keys into settings.json, REST configs
+    # LiteLLM supply chain attack (#65) specifically targeted these
+    "~/.vscode",
+    ".vscode",
+    ".idea",
+    "~/Library/Application Support/Code",
+    "~/.config/Code",
+    # AI agent memory stores — conversation history, cached approvals, session tokens
+    "~/.claude",
+    # Linux keyring (GNOME secret service stores)
+    "~/.local/share/keyrings",
+    # Fish shell history — same credential exposure risk as bash_history
+    "~/.local/share/fish",
+    # macOS Keychain files
+    "~/Library/Keychains",
 )
 
 _PROTECTED_EXACT = (
@@ -40,6 +55,8 @@ _PROTECTED_EXACT = (
     "~/.bash_history",
     "~/.zsh_history",
     "~/.profile",
+    "~/.bash_profile",
+    "~/.zprofile",
     "~/.bashrc",
     "~/.zshrc",
 )
