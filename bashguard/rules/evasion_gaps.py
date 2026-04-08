@@ -356,3 +356,37 @@ class HeredocInterpreterRule:
                             message=f"{self.description}: {interp!r} heredoc contains {inner_findings[0].rule_id}",
                             matched_text=body.strip()[:120],
                         )
+
+
+# ─── Glob in command name (spec 04-evasions.md pattern 3.3) ──────────────────
+
+# Glob characters in a word node indicate runtime path expansion
+_GLOB_CHARS_RE = _re.compile(r'[?*\[]')
+
+
+@register
+class GlobCommandNameRule:
+    rule_id = "evasion.glob_command_name"
+    severity = Severity.HIGH
+    description = "Glob wildcard in command name — bypasses allowlist string matching"
+
+    def check(self, script: str, context: ExecutionContext) -> list[Finding]:
+        try:
+            return list(self._scan(script))
+        except Exception:
+            _log.exception("glob_command_name rule error")
+            return []
+
+    def _scan(self, script: str):
+        if not script.strip():
+            return
+        cmds = parse(script)
+        for cmd in cmds:
+            if _GLOB_CHARS_RE.search(cmd.name):
+                yield Finding(
+                    rule_id=self.rule_id,
+                    severity=self.severity,
+                    action_type=ActionType.OBFUSCATED,
+                    message=f"{self.description}: {cmd.name!r}",
+                    matched_text=cmd.name,
+                )
