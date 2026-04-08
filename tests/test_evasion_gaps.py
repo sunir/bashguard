@@ -167,3 +167,44 @@ class TestXargsShell:
 
     def test_unrelated_allowed(self, ctx):
         assert _xargs_rule().check("git status", ctx) == []
+
+
+# ─── ANSI-C hex/octal escape obfuscation (spec 04 pattern 3.4) ───────────────
+
+def _ansi_escape_rule():
+    from bashguard.rules.evasion_gaps import AnsiCEscapeRule
+    return AnsiCEscapeRule()
+
+
+class TestAnsiCEscape:
+    """
+    Story: $'\\x2f\\x65\\x74\\x63\\x2f\\x70\\x61\\x73\\x73\\x77\\x64' decodes to
+    /etc/passwd. ANSI-C quoting ($'...') with \\x or \\0 escapes hides the
+    actual string value from static analysis. Any command using hex/octal
+    ANSI-C arguments could be accessing sensitive paths or executing encoded
+    payloads.
+    """
+    def test_hex_escape_in_arg_blocked(self, ctx):
+        findings = _ansi_escape_rule().check(r"cat $'\x2f\x65\x74\x63\x2f\x70\x61\x73\x73\x77\x64'", ctx)
+        assert len(findings) == 1
+        assert findings[0].rule_id == "evasion.ansi_c_escape"
+        assert findings[0].severity == Severity.HIGH
+
+    def test_octal_escape_blocked(self, ctx):
+        findings = _ansi_escape_rule().check(r"rm $'\057\145\164\143\057\160\141\163\163\167\144'", ctx)
+        assert len(findings) == 1
+
+    def test_hex_in_command_name_blocked(self, ctx):
+        # $'\x62\x61\x73\x68' = "bash"
+        findings = _ansi_escape_rule().check(r"$'\x62\x61\x73\x68' -c 'id'", ctx)
+        assert len(findings) == 1
+
+    def test_normal_string_allowed(self, ctx):
+        assert _ansi_escape_rule().check("cat /etc/passwd", ctx) == []
+
+    def test_ansi_c_newline_allowed(self, ctx):
+        # $'\n' is a legitimate newline — only hex/octal are suspicious
+        assert _ansi_escape_rule().check(r"echo $'\n'", ctx) == []
+
+    def test_ansi_c_tab_allowed(self, ctx):
+        assert _ansi_escape_rule().check(r"printf $'\t'", ctx) == []
