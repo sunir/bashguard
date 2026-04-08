@@ -91,3 +91,5 @@ rules/
 !bashguard/rules/
 !tests/rules/
 done.log
+.deploy/
+.cache/
