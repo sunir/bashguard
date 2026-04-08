@@ -52,6 +52,7 @@ class ProjectConfig:
     severity_overrides: dict[str, str] = field(default_factory=dict)
     rule_overrides: dict[str, str] = field(default_factory=dict)
     additional_allowed_hosts: frozenset[str] = field(default_factory=frozenset)
+    trusted_paths: frozenset[str] = field(default_factory=frozenset)
 
 
 def load_project_config(path: Path) -> ProjectConfig | None:
@@ -86,13 +87,20 @@ def load_project_config(path: Path) -> ProjectConfig | None:
         if rule_id and verdict:
             rule_overrides[str(rule_id)] = str(verdict).lower()
 
-    for host in (data.get("context", {}) or {}).get("allowed_hosts", []) or []:
+    context_section = data.get("context", {}) or {}
+
+    for host in context_section.get("allowed_hosts", []) or []:
         additional_allowed_hosts.add(str(host))
+
+    trusted_paths: set[str] = set()
+    for p in context_section.get("trusted_paths", []) or []:
+        trusted_paths.add(str(p))
 
     return ProjectConfig(
         severity_overrides=severity_overrides,
         rule_overrides=rule_overrides,
         additional_allowed_hosts=frozenset(additional_allowed_hosts),
+        trusted_paths=frozenset(trusted_paths),
     )
 
 
