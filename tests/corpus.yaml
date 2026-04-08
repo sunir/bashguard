@@ -583,3 +583,10 @@
   description: Heredoc to Python interpreter — cross-language escape, flagged unconditionally
   expected_rules: [evasion.heredoc_interpreter]
   expected_verdict: block
+
+# ─── GLOB IN COMMAND NAME (spec 04-evasions.md pattern 3.3) ──────────────────
+
+- command: "/???/bin/ba* -c 'id'"
+  description: Glob in command name bypasses allowlist string matching for bash
+  expected_rules: [evasion.glob_command_name]
+  expected_verdict: block

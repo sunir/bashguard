@@ -330,3 +330,52 @@ class TestHeredocInterpreter:
     def test_bash_herestring_benign_allowed(self, ctx):
         # Benign literal content — no dangerous commands
         assert _heredoc_rule().check('bash <<< "echo hello"', ctx) == []
+
+
+# ─── Glob in command name (spec 04-evasions.md pattern 3.3) ──────────────────
+
+def _glob_cmd_rule():
+    from bashguard.rules.evasion_gaps import GlobCommandNameRule
+    return GlobCommandNameRule()
+
+
+class TestGlobCommandName:
+    """
+    Story (glob_command_name): Glob wildcards in the command name position bypass
+    path-based allowlists. /???/bin/ba* resolves to bash at runtime but a string
+    check for "bash" won't match. tree-sitter parses these as word nodes — we
+    detect ? * [ in the command name text.
+
+    Rule: flag any command whose name contains glob characters.
+    """
+    def test_question_glob_blocked(self, ctx):
+        findings = _glob_cmd_rule().check('/???/bin/ba* -c "id"', ctx)
+        assert len(findings) == 1
+        assert findings[0].rule_id == "evasion.glob_command_name"
+        assert findings[0].severity == Severity.HIGH
+        assert findings[0].action_type == ActionType.OBFUSCATED
+
+    def test_star_glob_blocked(self, ctx):
+        findings = _glob_cmd_rule().check('/usr/bin/b* -c "id"', ctx)
+        assert len(findings) == 1
+
+    def test_bracket_glob_blocked(self, ctx):
+        findings = _glob_cmd_rule().check('/usr/bin/[b]ash -c "id"', ctx)
+        assert len(findings) == 1
+
+    def test_question_in_path_blocked(self, ctx):
+        findings = _glob_cmd_rule().check('/???/???/rm -rf /', ctx)
+        assert len(findings) == 1
+
+    def test_canonical_path_allowed(self, ctx):
+        assert _glob_cmd_rule().check("/usr/bin/bash -c 'id'", ctx) == []
+
+    def test_glob_in_arg_allowed(self, ctx):
+        # Glob in argument position is normal shell usage
+        assert _glob_cmd_rule().check("ls /???/???/rm", ctx) == []
+
+    def test_glob_in_arg2_allowed(self, ctx):
+        assert _glob_cmd_rule().check("find . -name '*.py'", ctx) == []
+
+    def test_unrelated_allowed(self, ctx):
+        assert _glob_cmd_rule().check("git status", ctx) == []
