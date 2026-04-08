@@ -62,6 +62,16 @@ def _load_builtin_rules() -> None:
     from bashguard.rules import sql_destruction    # noqa: F401
     from bashguard.rules import tunneling          # noqa: F401
     from bashguard.rules import crypto_mining      # noqa: F401
+    from bashguard.rules import process_kill       # noqa: F401
+    from bashguard.rules import proc_scrape        # noqa: F401
+    from bashguard.rules import public_disclosure  # noqa: F401
+    from bashguard.rules import proc_inject        # noqa: F401
+    from bashguard.rules import git_history_rewrite  # noqa: F401
+    from bashguard.rules import proc_root_bypass   # noqa: F401
+    from bashguard.rules import model_weights_exfil  # noqa: F401
+    from bashguard.rules import oversight_tamper   # noqa: F401
+    from bashguard.rules import agent_spawn        # noqa: F401
+    from bashguard.rules import keychain           # noqa: F401
 
 
 _load_builtin_rules()
