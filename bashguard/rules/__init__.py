@@ -72,7 +72,8 @@ def _load_builtin_rules() -> None:
     from bashguard.rules import oversight_tamper   # noqa: F401
     from bashguard.rules import agent_spawn        # noqa: F401
     from bashguard.rules import keychain           # noqa: F401
-    from bashguard.rules import evasion_gaps       # noqa: F401
+    from bashguard.rules import evasion_gaps          # noqa: F401
+    from bashguard.rules import persistence_privesc   # noqa: F401
 
 
 _load_builtin_rules()
