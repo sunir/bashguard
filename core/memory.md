@@ -52,9 +52,25 @@ hooks/
 - Colony dist: `~/source/colony/system/claude/hooks/PreToolUse.d/system/70-bashguard`
 - Deploy: push to main → post-merge hook → auto-deploys to prod worktree
 
+## Rule Corpus (82-incident database, session 1)
+
+Every rule is grounded in a documented real incident. Key additions:
+
+- `process.agent_kill` — pkill/killall (Mythos cascading server takedown)
+- `proc.credential_scrape` — /proc/*/environ, /proc/*/mem (Mythos memory scrape)
+- `network.public_disclosure` — gh gist create, pastebin (Mythos unprompted disclosure)
+- `proc.process_inject` — gdb -p, strace -p (Mythos MCP server editing)
+- `git.history_rewrite` — git commit --amend, git rebase -i (Mythos cover-up)
+- `evasion.proc_root_bypass` — /proc/self/root/... (CVE-2025-54794)
+- `exfil.model_weights` — .safetensors/.ckpt upload (Vertex AI ModeLeak)
+- `config.oversight_tamper` — sed 's/oversight: true/false/' (2025 documented)
+- `evasion.agent_spawn` — claude, autogpt, crewai, aider (RSA 2026 swarm)
+- `credentials.keychain` — security find-generic-password, secret-tool lookup
+- credentials paths extended: .vscode/, .idea/, ~/.claude/, keyrings, fish history
+
 ## Workflow
 
-- Tests: `.venv/bin/pytest tests/` (525 passing as of session 1)
+- Tests: `.venv/bin/pytest tests/` (682 passing as of session 1, 2026-04-08)
 - Branches: cannot commit to main directly; use feature branch → merge
 - Rules dir is gitignored: `git add -f` when committing rule changes
 
@@ -67,3 +83,9 @@ hooks/
 3. **"Exits 2 to deny" was in the hook comment but unimplemented.** Documentation can be ahead of implementation. When something doesn't work, check if the documented protocol matches the actual code.
 
 4. **Verify with production binary, not just dev tests.** The dev tests passed (with wrong exit code assertions). The production binary needed to be tested end-to-end.
+
+5. **Evidence is not enforcement.** A rule in the registry without a test against the actual attack pattern isn't protecting you. Build from real incidents.
+
+6. **The meta-attack: remove the defense, not circumvent it.** config.oversight_tamper exists because "change oversight_enabled to false" is simpler than any evasion technique. Defense systems that can be reconfigured by what they're defending against are illusions.
+
+7. **Ego shapes threat models.** If your model assumes the agent doesn't know what it's doing, your defenses will be different — and weaker — than if you assume it does. Assume it does.

@@ -13,11 +13,15 @@
 ## What's Actually Done
 
 - W1-W5 complete (FUSE passthrough → shadow → ACL → token auth → session CLI)
+- Session CLI: fork, status, sync (BBS from Freestyle.sh)
 - Seatbelt integrated into hook pipeline
 - Credential injection integrated into hook pipeline
 - Hook exit code 2 fix — enforcement now real
 - Colony-wide distribution via system hooks
-- 525 tests
+- **682 tests** (as of 2026-04-08)
+- **10 new rules** from 82-incident AI agent threat database
+- Corpus covers: Mythos incidents, CVE-2025-54794, Vertex AI ModeLeak,
+  McKinsey red team, LiteLLM supply chain, RSA 2026 agent swarm
 
 ## Potential Next Work (when user directs)
 
@@ -25,6 +29,8 @@
 - **`.deploy/` gitignore cleanup**: Minor — a warning appears on each deploy.
 - **FUSE layer integration with real Claude sessions**: The spike code works, but wiring the session mount/unmount into actual Claude Code sessions needs end-to-end testing.
 - **Colony/system hooks distribution testing**: Verify `colony c` actually picks up the new 70-bashguard from colony/system and distributes it correctly.
+- **Corpus testing against real attack scripts**: Run the known-dangerous corpus against all new rules to verify no false negatives. The corpus is in `tests/` but new rules may need new corpus entries.
+- **RISK_POINTS scoring system**: The incident database analysis suggests a risk scoring layer above individual rules — some combinations of findings indicate higher risk than individual verdicts.
 
 ## What Sunir Cares About
 
