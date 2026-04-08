@@ -528,3 +528,22 @@
   description: Relative traversal to reach curl via non-canonical path
   expected_rules: [evasion.path_traversal]
   expected_verdict: block
+
+# ─── FUNCTION SHADOW + PATH TRAVERSAL (spec 04 patterns 4.4, 2.4) ────────────
+
+- command: "cd() { rm -rf \"$1\"; }"
+  description: Shadow cd builtin as destructive function (spec 4.4)
+  expected_rules: [evasion.function_shadow]
+  expected_verdict: block
+
+- command: "/usr/bin/../bin/rm -rf /"
+  description: Path traversal in command name bypasses denylist (spec 2.4)
+  expected_rules: [evasion.path_traversal]
+  expected_verdict: block
+
+# ─── XARGS TO SHELL (spec 04-evasions.md pattern 4.6) ────────────────────────
+
+- command: "echo 'rm -rf /' | xargs -I {} bash -c '{}'"
+  description: xargs bridges stdin to bash execution (indirect pipe_to_shell)
+  expected_rules: [evasion.xargs_shell]
+  expected_verdict: block
