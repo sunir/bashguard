@@ -179,8 +179,12 @@ def _check_boundary(script: str, context: ExecutionContext) -> list[Finding]:
             continue
 
         real = os.path.normpath(clean)
-        if not real.startswith(worktree):
-            findings.append(Finding(
+        if real.startswith(worktree):
+            continue
+        # Allow explicitly trusted paths from project config or context
+        if any(real.startswith(os.path.normpath(p)) for p in context.allowed_paths):
+            continue
+        findings.append(Finding(
                 rule_id="content.outside_boundary",
                 severity=Severity.HIGH,
                 message=f"File access outside worktree boundary: {clean}",

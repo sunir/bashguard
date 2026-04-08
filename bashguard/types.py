@@ -38,11 +38,12 @@ def _run_audit(script: str):
     Loads .bashguard.yaml from CWD for project-local policy ratcheting.
     """
     import os
-    ctx = make_context()
     base_policy = PolicyConfig.default()
     project_cfg = load_project_config(
         Path(os.getcwd()) / ".bashguard.yaml"
     )
+    trusted = project_cfg.trusted_paths if project_cfg else frozenset()
+    ctx = make_context(allowed_paths=trusted)
     policy = merge_configs(base_policy, project_cfg)
     findings = _audit(script, ctx)
     verdict = decide(findings, ctx, policy)
