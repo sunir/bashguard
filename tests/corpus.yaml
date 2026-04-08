@@ -559,3 +559,15 @@
   description: Octal-encoded /etc/passwd — same technique with octal escapes
   expected_rules: [evasion.ansi_c_escape]
   expected_verdict: block
+
+# ─── SHELLSHOCK ENV INJECTION (spec 04-evasions.md pattern 6.5) ──────────────
+
+- command: "env x='() { :;}; echo pwned' bash -c 'echo test'"
+  description: CVE-2014-6271 shellshock — () { in env var triggers function injection
+  expected_rules: [evasion.shellshock]
+  expected_verdict: block
+
+- command: "export BASH_FUNC_ls='() { rm -rf /; }'"
+  description: BASH_FUNC_* export injects function via env — shellshock bypass
+  expected_rules: [evasion.shellshock]
+  expected_verdict: block
