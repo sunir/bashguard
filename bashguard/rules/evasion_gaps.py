@@ -245,3 +245,80 @@ class ShellshockRule:
                     message=self.description,
                     matched_text=stripped,
                 )
+
+
+# ─── Heredoc to interpreter (spec 04-evasions.md pattern 7.4) ────────────────
+
+import tree_sitter_bash as _tsb
+from tree_sitter import Language as _Language, Parser as _TsParser
+
+_BASH_LANG = _Language(_tsb.language())
+
+_SHELL_INTERPS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+_SCRIPT_INTERPS = frozenset({"python", "python3", "python2", "ruby", "perl", "node", "nodejs", "php"})
+
+
+def _get_heredoc_bodies(script: str) -> list[tuple[str, str]]:
+    """Return list of (interpreter_name, body_text) for each heredoc redirect found."""
+    p = _TsParser(_BASH_LANG)
+    tree = p.parse(script.encode())
+    results = []
+
+    def walk(node):
+        if node.type == "redirected_statement":
+            cmd_node = None
+            for child in node.children:
+                if child.type == "command":
+                    for sub in child.children:
+                        if sub.type == "command_name":
+                            cmd_node = sub.text.decode() if sub.text else None
+                            break
+                elif child.type == "heredoc_redirect":
+                    body_node = next(
+                        (c for c in child.children if c.type == "heredoc_body"), None
+                    )
+                    if body_node and cmd_node:
+                        results.append((cmd_node, body_node.text.decode()))
+        for child in node.children:
+            walk(child)
+
+    walk(tree.root_node)
+    return results
+
+
+@register
+class HeredocInterpreterRule:
+    rule_id = "evasion.heredoc_interpreter"
+    severity = Severity.HIGH
+    description = "Heredoc feeds content to interpreter — may deliver obfuscated payload"
+
+    def check(self, script: str, context: ExecutionContext) -> list[Finding]:
+        try:
+            return list(self._scan(script, context))
+        except Exception:
+            _log.exception("heredoc_interpreter rule error")
+            return []
+
+    def _scan(self, script: str, context: ExecutionContext):
+        for interp, body in _get_heredoc_bodies(script):
+            if interp in _SCRIPT_INTERPS:
+                # Non-bash interpreter: flag unconditionally (cross-language escape)
+                yield Finding(
+                    rule_id=self.rule_id,
+                    severity=self.severity,
+                    action_type=ActionType.OBFUSCATED,
+                    message=f"{self.description}: {interp!r} heredoc",
+                    matched_text=f"{interp} <<...heredoc...",
+                )
+            elif interp in _SHELL_INTERPS:
+                # Shell interpreter: re-audit the heredoc body
+                from bashguard.auditor import audit
+                inner_findings = audit(body.strip(), context)
+                if inner_findings:
+                    yield Finding(
+                        rule_id=self.rule_id,
+                        severity=self.severity,
+                        action_type=ActionType.OBFUSCATED,
+                        message=f"{self.description}: {interp!r} heredoc contains {inner_findings[0].rule_id}",
+                        matched_text=body.strip()[:120],
+                    )

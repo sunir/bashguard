@@ -571,3 +571,15 @@
   description: BASH_FUNC_* export injects function via env — shellshock bypass
   expected_rules: [evasion.shellshock]
   expected_verdict: block
+
+# ─── HEREDOC TO INTERPRETER (spec 04-evasions.md pattern 7.4) ────────────────
+
+- command: "bash <<EOF\nrm -rf /\nEOF"
+  description: Heredoc feeds destructive command to bash — body is visible in AST
+  expected_rules: [evasion.heredoc_interpreter]
+  expected_verdict: block
+
+- command: "python3 <<PYEOF\nimport os; os.system('id')\nPYEOF"
+  description: Heredoc to Python interpreter — cross-language escape, flagged unconditionally
+  expected_rules: [evasion.heredoc_interpreter]
+  expected_verdict: block
