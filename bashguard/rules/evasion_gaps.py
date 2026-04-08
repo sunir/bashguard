@@ -265,10 +265,12 @@ def _get_heredoc_bodies(script: str) -> list[tuple[str, str]]:
     results = []
 
     def walk(node):
-        if node.type == "redirected_statement":
+        if node.type in ("redirected_statement", "command"):
             cmd_node = None
             for child in node.children:
-                if child.type == "command":
+                if child.type == "command_name":
+                    cmd_node = child.text.decode() if child.text else None
+                elif child.type == "command":
                     for sub in child.children:
                         if sub.type == "command_name":
                             cmd_node = sub.text.decode() if sub.text else None
@@ -279,6 +281,28 @@ def _get_heredoc_bodies(script: str) -> list[tuple[str, str]]:
                     )
                     if body_node and cmd_node:
                         results.append((cmd_node, body_node.text.decode()))
+                elif child.type == "herestring_redirect":
+                    # <<< operator: get the string content
+                    if cmd_node:
+                        # Check if content is dynamic (command_substitution) or literal
+                        has_cmd_sub = any(
+                            c.type == "command_substitution" for c in child.children
+                        )
+                        literal_node = next(
+                            (c for c in child.children
+                             if c.type in ("string", "raw_string")),
+                            None,
+                        )
+                        if has_cmd_sub:
+                            results.append((cmd_node, "\x00DYNAMIC"))
+                        elif literal_node:
+                            # Extract inner text from quoted string
+                            inner = next(
+                                (c for c in literal_node.children
+                                 if c.type == "string_content"),
+                                literal_node,
+                            )
+                            results.append((cmd_node, inner.text.decode() if inner.text else ""))
         for child in node.children:
             walk(child)
 
@@ -300,6 +324,7 @@ class HeredocInterpreterRule:
             return []
 
     def _scan(self, script: str, context: ExecutionContext):
+        from bashguard.auditor import audit
         for interp, body in _get_heredoc_bodies(script):
             if interp in _SCRIPT_INTERPS:
                 # Non-bash interpreter: flag unconditionally (cross-language escape)
@@ -311,14 +336,23 @@ class HeredocInterpreterRule:
                     matched_text=f"{interp} <<...heredoc...",
                 )
             elif interp in _SHELL_INTERPS:
-                # Shell interpreter: re-audit the heredoc body
-                from bashguard.auditor import audit
-                inner_findings = audit(body.strip(), context)
-                if inner_findings:
+                if body == "\x00DYNAMIC":
+                    # Dynamic herestring content (command substitution) — opaque, flag it
                     yield Finding(
                         rule_id=self.rule_id,
                         severity=self.severity,
                         action_type=ActionType.OBFUSCATED,
-                        message=f"{self.description}: {interp!r} heredoc contains {inner_findings[0].rule_id}",
-                        matched_text=body.strip()[:120],
+                        message=f"{self.description}: {interp!r} herestring with dynamic content",
+                        matched_text=f"{interp} <<< $(...)",
                     )
+                else:
+                    # Shell interpreter: re-audit the body/herestring content
+                    inner_findings = audit(body.strip(), context)
+                    if inner_findings:
+                        yield Finding(
+                            rule_id=self.rule_id,
+                            severity=self.severity,
+                            action_type=ActionType.OBFUSCATED,
+                            message=f"{self.description}: {interp!r} heredoc contains {inner_findings[0].rule_id}",
+                            matched_text=body.strip()[:120],
+                        )
