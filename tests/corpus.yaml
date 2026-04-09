@@ -621,3 +621,34 @@
   description: Spawns root shell via pkexec (polkit) — privilege escalation
   expected_rules: [privesc.sudo_shell]
   expected_verdict: block
+
+# ─── CONTAINER ESCAPE ────────────────────────────────────────────────────────
+
+- command: "docker run --privileged alpine sh"
+  description: Privileged container grants full host capabilities — breakout
+  expected_rules: [container.escape]
+  expected_verdict: block
+
+- command: "docker run -v /:/host alpine cat /host/etc/shadow"
+  description: Mounts host root into container — filesystem breakout
+  expected_rules: [container.escape]
+  expected_verdict: block
+
+# ─── FIREWALL TAMPER ─────────────────────────────────────────────────────────
+
+- command: "iptables -F"
+  description: Flush all firewall rules — enables unrestricted lateral movement
+  expected_rules: [network.firewall_tamper]
+  expected_verdict: block
+
+- command: "ufw disable"
+  description: Disable UFW firewall entirely
+  expected_rules: [network.firewall_tamper]
+  expected_verdict: block
+
+# ─── STAGING SERVER ──────────────────────────────────────────────────────────
+
+- command: "python3 -m http.server 8080"
+  description: HTTP staging server for payload hosting or data exfiltration
+  expected_rules: [network.staging_server]
+  expected_verdict: block
