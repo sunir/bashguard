@@ -76,6 +76,7 @@ def _load_builtin_rules() -> None:
     from bashguard.rules import persistence_privesc   # noqa: F401
     from bashguard.rules import container_network     # noqa: F401
     from bashguard.rules import system_tamper         # noqa: F401
+    from bashguard.rules import account_log_dump      # noqa: F401
 
 
 _load_builtin_rules()
