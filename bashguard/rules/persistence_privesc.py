@@ -108,16 +108,19 @@ class CronPersistRule:
         for cmd in cmds:
             if cmd.name != "crontab":
                 continue
-            # Flag `crontab -` (reads from stdin, installs jobs)
-            # Allow: -e (interactive), -l (list), -r (remove own crontab)
-            args = cmd.args + cmd.flags
-            if "-" in args and "-e" not in args and "-l" not in args:
+            # Allow: -e (interactive edit), -l (list), -r (remove own crontab)
+            flags = cmd.flags
+            if "-e" in flags or "-l" in flags or "-r" in flags:
+                continue
+            # Block: `crontab -` (reads from stdin) or `crontab <file>` (installs from file)
+            args = cmd.args + flags
+            if "-" in args or any(not a.startswith("-") for a in cmd.args):
                 yield Finding(
                     rule_id=self.rule_id,
                     severity=self.severity,
                     action_type=ActionType.OBFUSCATED,
                     message=self.description,
-                    matched_text="crontab -",
+                    matched_text="crontab",
                 )
 
 
