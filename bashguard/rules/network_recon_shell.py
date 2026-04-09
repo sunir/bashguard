@@ -117,15 +117,20 @@ class DiskCopyRule:
                 continue
             all_args = cmd.args + cmd.flags
             for arg in all_args:
-                # Look for if=/dev/... (input from block device)
-                if arg.startswith("if=/dev/"):
-                    src = arg[3:]  # strip 'if='
-                    if src not in _SAFE_DEV_SOURCES:
-                        yield Finding(
-                            rule_id=self.rule_id,
-                            severity=self.severity,
-                            action_type=ActionType.CREDENTIAL_ACCESS,
-                            message=f"{self.description}: {arg}",
-                            matched_text=f"dd {arg}",
-                        )
-                        break
+                if not arg.startswith("if="):
+                    continue
+                src = arg[3:]  # strip 'if='
+                # Block block devices (/dev/sda, /dev/mem) and kernel memory (/proc/kcore)
+                blocked = (
+                    (src.startswith("/dev/") and src not in _SAFE_DEV_SOURCES)
+                    or src in ("/proc/kcore", "/proc/kallsyms")
+                )
+                if blocked:
+                    yield Finding(
+                        rule_id=self.rule_id,
+                        severity=self.severity,
+                        action_type=ActionType.CREDENTIAL_ACCESS,
+                        message=f"{self.description}: {arg}",
+                        matched_text=f"dd {arg}",
+                    )
+                    break
