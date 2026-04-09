@@ -52,9 +52,9 @@ hooks/
 - Colony dist: `~/source/colony/system/claude/hooks/PreToolUse.d/system/70-bashguard`
 - Deploy: push to main → post-merge hook → auto-deploys to prod worktree
 
-## Rule Corpus (82-incident database, session 1)
+## Rule Corpus (82-incident database — 66 rules total as of session 2, 2026-04-09)
 
-Every rule is grounded in a documented real incident. Key additions:
+Every rule is grounded in a documented real incident. Key additions from session 1:
 
 - `process.agent_kill` — pkill/killall (Mythos cascading server takedown)
 - `proc.credential_scrape` — /proc/*/environ, /proc/*/mem (Mythos memory scrape)
@@ -66,11 +66,38 @@ Every rule is grounded in a documented real incident. Key additions:
 - `config.oversight_tamper` — sed 's/oversight: true/false/' (2025 documented)
 - `evasion.agent_spawn` — claude, autogpt, crewai, aider (RSA 2026 swarm)
 - `credentials.keychain` — security find-generic-password, secret-tool lookup
-- credentials paths extended: .vscode/, .idea/, ~/.claude/, keyrings, fish history
+
+Key additions from session 2 (+16 rules):
+- `persistence.backdoor_account` — useradd/usermod/userdel/chpasswd
+- `evasion.log_tamper` — auditd stop, journalctl vacuum, auditctl -e 0
+- `proc.gcore_dump` — live process memory dump (ssh-agent credential extraction)
+- `persistence.service_enable` — systemctl enable (boot persistence)
+- `persistence.at_job` — at/batch scheduled jobs
+- `persistence.ssh_key_deploy` — ssh-copy-id lateral movement
+- `network.port_scan` — nmap/masscan/zmap reconnaissance
+- `network.socat_shell` — socat EXEC: bind/reverse shell
+- `destructive.disk_copy` — dd if=/dev/sda or /proc/kcore
+- `package.local_install` — dpkg/rpm/pip install from local path
+- `proc.xinput_keylogger` — xinput test keyboard capture
+- `proc.osascript_abuse` — osascript keystroke/clipboard theft
+- `system.sysctl_write` — sysctl -w kernel parameter modification
+- `network.route_tamper` — ip route add/del on default/0.0.0.0/0
+- cron_install extended: now catches `crontab <file>` not just `crontab -`
+- disk_copy extended: catches `dd if=/proc/kcore` in addition to /dev/ paths
+
+## Parser Behavior Cheatsheet
+
+- `auditctl -e 0` → flags=['-e'], args=['0'] — flag and value are split
+- `dd if=/dev/sda` → `if=/dev/sda` is a single arg in cmd.args
+- `socat TCP-LISTEN:4444 EXEC:/bin/bash` → "EXEC:/bin/bash" is a single arg
+- `ip route add default` → "route", "add", "default" are all in cmd.args
+- `crontab /tmp/evil.cron` → file path lands in cmd.args (no flag)
+- `-m http.server` → flags=['-m'], args=['http.server'] (module name in args[0])
+- `-v /:/host` → flags=['-v'], volume spec lands in cmd.args
 
 ## Workflow
 
-- Tests: `.venv/bin/pytest tests/` (682 passing as of session 1, 2026-04-08)
+- Tests: `.venv/bin/pytest tests/` (962 passing as of session 2, 2026-04-09)
 - Branches: cannot commit to main directly; use feature branch → merge
 - Rules dir is gitignored: `git add -f` when committing rule changes
 
