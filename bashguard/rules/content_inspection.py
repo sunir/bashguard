@@ -53,8 +53,18 @@ _SENSITIVE_SOURCES: frozenset[str] = frozenset({
 
 # ─── Safe prefixes for boundary check ──────────────────────────────────────
 
-_BOUNDARY_EXEMPT_PREFIXES = ("/tmp", "/var/tmp", "/dev/null", "/dev/stdin",
-                              "/dev/stdout", "/dev/stderr")
+_BOUNDARY_EXEMPT_PREFIXES = (
+    # Temp paths — always writable
+    "/tmp", "/var/tmp",
+    # Safe device paths
+    "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr",
+    # Standard OS system paths — read-only OS components, not user data.
+    # Reading these is normal for system tool queries (getcap, file, stat, ls).
+    # Dangerous system paths (/etc/shadow, /proc/*/environ) are caught by
+    # credentials.privileged_path and proc.credential_scrape respectively.
+    "/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/", "/opt/", "/snap/",
+    "/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/snap",
+)
 
 
 def _looks_like_path(token: str) -> bool:

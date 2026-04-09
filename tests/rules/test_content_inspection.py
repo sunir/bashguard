@@ -96,6 +96,40 @@ class TestProjectBoundary:
         fs = ContentInspectionRule().check("cat /tmp/output.txt", ctx)
         assert not any(f.rule_id == "content.outside_boundary" for f in fs)
 
+    def test_system_binary_query_not_flagged(self):
+        """getcap, file, stat on /usr/bin paths — routine system tool queries."""
+        ctx = ExecutionContext(
+            cwd="/home/user/myproject",
+            worktree_root="/home/user/myproject",
+        )
+        fs = ContentInspectionRule().check("getcap /usr/bin/ping", ctx)
+        assert not any(f.rule_id == "content.outside_boundary" for f in fs)
+
+    def test_usr_lib_not_flagged(self):
+        ctx = ExecutionContext(
+            cwd="/home/user/myproject",
+            worktree_root="/home/user/myproject",
+        )
+        fs = ContentInspectionRule().check("file /usr/lib/libssl.so", ctx)
+        assert not any(f.rule_id == "content.outside_boundary" for f in fs)
+
+    def test_bin_path_not_flagged(self):
+        ctx = ExecutionContext(
+            cwd="/home/user/myproject",
+            worktree_root="/home/user/myproject",
+        )
+        fs = ContentInspectionRule().check("ls /bin/", ctx)
+        assert not any(f.rule_id == "content.outside_boundary" for f in fs)
+
+    def test_other_user_home_still_flagged(self):
+        """Lateral access to other user's home directory is still blocked."""
+        ctx = ExecutionContext(
+            cwd="/home/user/myproject",
+            worktree_root="/home/user/myproject",
+        )
+        fs = ContentInspectionRule().check("cat /home/otheruser/.bashrc", ctx)
+        assert any(f.rule_id == "content.outside_boundary" for f in fs)
+
 
 class TestActionTypes:
     def test_secret_finding_is_credential_access(self):
