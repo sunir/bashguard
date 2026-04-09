@@ -149,5 +149,9 @@ class TestDiskCopy:
     def test_dd_zero_allowed(self, ctx):
         assert _dd_rule().check("dd if=/dev/zero of=sparse.img bs=1M count=10", ctx) == []
 
+    def test_dd_kcore_blocked(self, ctx):
+        findings = _dd_rule().check("dd if=/proc/kcore of=/tmp/kcore.dump", ctx)
+        assert len(findings) == 1
+
     def test_unrelated_allowed(self, ctx):
         assert _dd_rule().check("ls -la", ctx) == []

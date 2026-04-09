@@ -79,6 +79,7 @@ def _load_builtin_rules() -> None:
     from bashguard.rules import account_log_dump      # noqa: F401
     from bashguard.rules import service_persist         # noqa: F401
     from bashguard.rules import network_recon_shell    # noqa: F401
+    from bashguard.rules import local_pkg_keylogger    # noqa: F401
 
 
 _load_builtin_rules()
