@@ -652,3 +652,29 @@
   description: HTTP staging server for payload hosting or data exfiltration
   expected_rules: [network.staging_server]
   expected_verdict: block
+
+# ─── KERNEL MODULE LOADING ───────────────────────────────────────────────────
+
+- command: "insmod /tmp/evil.ko"
+  description: Load kernel module from temp — rootkit installation
+  expected_rules: [system.kernel_module]
+  expected_verdict: block
+
+# ─── SETCAP PRIVILEGE ESCALATION ─────────────────────────────────────────────
+
+- command: "setcap cap_setuid+ep /tmp/shell"
+  description: Grant setuid capability to binary — privilege escalation prep
+  expected_rules: [privesc.setcap]
+  expected_verdict: block
+
+# ─── SUID CHMOD ──────────────────────────────────────────────────────────────
+
+- command: "chmod u+s /tmp/shell"
+  description: Set SUID bit — file runs as owner (often root)
+  expected_rules: [privesc.suid_chmod]
+  expected_verdict: block
+
+- command: "chmod 4755 /tmp/shell"
+  description: Octal SUID mode — same effect as chmod u+s
+  expected_rules: [privesc.suid_chmod]
+  expected_verdict: block
