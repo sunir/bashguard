@@ -123,3 +123,37 @@ class TestXinputKeylogger:
 
     def test_unrelated_allowed(self, ctx):
         assert _xinput_rule().check("git status", ctx) == []
+
+
+# ─── osascript Abuse ─────────────────────────────────────────────────────────
+
+def _osascript_rule():
+    from bashguard.rules.local_pkg_keylogger import OsascriptAbuseRule
+    return OsascriptAbuseRule()
+
+
+class TestOsascriptAbuse:
+    def test_keystroke_blocked(self, ctx):
+        findings = _osascript_rule().check(
+            'osascript -e "tell application \\"System Events\\" to keystroke \\"a\\""', ctx
+        )
+        assert len(findings) == 1
+        assert findings[0].rule_id == "proc.osascript_abuse"
+        assert findings[0].severity == Severity.HIGH
+
+    def test_get_clipboard_blocked(self, ctx):
+        findings = _osascript_rule().check('osascript -e "get the clipboard"', ctx)
+        assert len(findings) == 1
+
+    def test_key_code_blocked(self, ctx):
+        findings = _osascript_rule().check('osascript -e "key code 36"', ctx)
+        assert len(findings) == 1
+
+    def test_osascript_notification_allowed(self, ctx):
+        # Legitimate: show a dialog or notification
+        assert _osascript_rule().check(
+            'osascript -e "display notification \\"done\\""', ctx
+        ) == []
+
+    def test_unrelated_allowed(self, ctx):
+        assert _osascript_rule().check("git status", ctx) == []

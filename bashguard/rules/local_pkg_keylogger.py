@@ -1,5 +1,5 @@
 """
-bashguard.rules.local_pkg_keylogger — Local package install and xinput keylogger.
+bashguard.rules.local_pkg_keylogger — Local package install, xinput keylogger, osascript abuse.
 
 package.local_install:
   dpkg -i and rpm -i install packages from local .deb/.rpm files — not from
@@ -12,6 +12,12 @@ proc.xinput_keylogger:
   xinput test <id> reads raw keyboard events from X input devices — a software
   keylogger. xinput list (diagnostic) and xinput list-props (query) are safe.
   Only 'test' and 'test-xi2' subcommands capture live keystrokes.
+
+proc.osascript_abuse:
+  osascript executes AppleScript on macOS. When the script contains 'keystroke'
+  (simulating user input) or 'get the clipboard' (clipboard read), it is being
+  used for input capture or data theft. Legitimate osascript use (automation,
+  notifications) does not need to read input events or clipboard content.
 """
 from __future__ import annotations
 import logging
@@ -140,3 +146,41 @@ class XinputKeyloggerRule:
                     message=f"{self.description}: xinput {subcmd}",
                     matched_text=f"xinput {subcmd}",
                 )
+
+
+# AppleScript keywords that indicate input capture or data theft
+_OSASCRIPT_ABUSE_KEYWORDS = ("keystroke", "get the clipboard", "key code")
+
+
+@register
+class OsascriptAbuseRule:
+    rule_id = "proc.osascript_abuse"
+    severity = Severity.HIGH
+    description = "osascript executes AppleScript for input capture or clipboard theft"
+
+    def check(self, script: str, context: ExecutionContext) -> list[Finding]:
+        try:
+            return list(self._scan(script))
+        except Exception:
+            _log.exception("osascript_abuse rule error")
+            return []
+
+    def _scan(self, script: str):
+        if not script.strip():
+            return
+        cmds = parse(script)
+        for cmd in cmds:
+            if cmd.name != "osascript":
+                continue
+            all_args = cmd.args + cmd.flags
+            joined = " ".join(all_args).lower()
+            for keyword in _OSASCRIPT_ABUSE_KEYWORDS:
+                if keyword in joined:
+                    yield Finding(
+                        rule_id=self.rule_id,
+                        severity=self.severity,
+                        action_type=ActionType.CREDENTIAL_ACCESS,
+                        message=f"{self.description}: '{keyword}' in script",
+                        matched_text=f"osascript ... {keyword}",
+                    )
+                    break
