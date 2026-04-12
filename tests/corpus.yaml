@@ -753,3 +753,13 @@
   description: Route git HTTP through attacker proxy (credential exfil)
   expected_rules: [supply_chain.pkg_config_inject]
   expected_verdict: block
+
+- command: "cp /tmp/evil /usr/local/bin/python3"
+  description: Binary trojanization — cp overwrites system binary with malicious version
+  expected_rules: [paths.protected_write]
+  expected_verdict: block
+
+- command: "install -m 755 /tmp/evil /usr/local/bin/git"
+  description: install command places malicious binary in system PATH
+  expected_rules: [paths.protected_write]
+  expected_verdict: block
