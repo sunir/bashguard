@@ -813,3 +813,18 @@
   description: ansible-vault decrypt decrypts secrets in place
   expected_rules: [credentials.cloud_secret]
   expected_verdict: block
+
+- command: "ldconfig /tmp/evil"
+  description: ldconfig with /tmp path injects library into dynamic linker cache
+  expected_rules: [evasion.ldconfig_inject]
+  expected_verdict: block
+
+- command: "cat /dev/sda"
+  description: Reading raw block device exfils disk contents including encrypted data
+  expected_rules: [destructive.disk_copy]
+  expected_verdict: block
+
+- command: "strings /dev/sda2"
+  description: strings on raw partition extracts credentials from swap or disk
+  expected_rules: [destructive.disk_copy]
+  expected_verdict: block

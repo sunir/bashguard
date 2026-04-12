@@ -28,7 +28,11 @@ from bashguard.rules import register
 _log = logging.getLogger(__name__)
 
 # Safe /dev sources — not block devices
-_SAFE_DEV_SOURCES = frozenset({"/dev/urandom", "/dev/random", "/dev/zero", "/dev/stdin"})
+_SAFE_DEV_SOURCES = frozenset({
+    "/dev/urandom", "/dev/random", "/dev/zero",
+    "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr",
+    "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
+})
 
 # Pattern for socat EXEC: address
 _SOCAT_EXEC_RE = re.compile(r"\bEXEC:", re.IGNORECASE)
@@ -108,29 +112,50 @@ class DiskCopyRule:
             _log.exception("disk_copy rule error")
             return []
 
+    # Commands that read file content (besides dd) that can exfil raw disk
+    _RAW_READ_CMDS = frozenset({"cat", "strings", "hexdump", "xxd", "od", "head", "tail"})
+
     def _scan(self, script: str):
         if not script.strip():
             return
         cmds = parse(script)
         for cmd in cmds:
-            if cmd.name != "dd":
+            if cmd.name == "dd":
+                yield from self._check_dd(cmd)
+            elif cmd.name in self._RAW_READ_CMDS:
+                yield from self._check_raw_read(cmd)
+
+    def _check_dd(self, cmd):
+        all_args = cmd.args + cmd.flags
+        for arg in all_args:
+            if not arg.startswith("if="):
                 continue
-            all_args = cmd.args + cmd.flags
-            for arg in all_args:
-                if not arg.startswith("if="):
-                    continue
-                src = arg[3:]  # strip 'if='
-                # Block block devices (/dev/sda, /dev/mem) and kernel memory (/proc/kcore)
-                blocked = (
-                    (src.startswith("/dev/") and src not in _SAFE_DEV_SOURCES)
-                    or src in ("/proc/kcore", "/proc/kallsyms")
+            src = arg[3:]  # strip 'if='
+            # Block block devices (/dev/sda, /dev/mem) and kernel memory (/proc/kcore)
+            blocked = (
+                (src.startswith("/dev/") and src not in _SAFE_DEV_SOURCES)
+                or src in ("/proc/kcore", "/proc/kallsyms")
+            )
+            if blocked:
+                yield Finding(
+                    rule_id=self.rule_id,
+                    severity=self.severity,
+                    action_type=ActionType.CREDENTIAL_ACCESS,
+                    message=f"{self.description}: {arg}",
+                    matched_text=f"dd {arg}",
                 )
-                if blocked:
+                break
+
+    def _check_raw_read(self, cmd):
+        """Catch cat/strings/hexdump etc. reading raw block devices."""
+        for arg in cmd.args:
+            if not arg.startswith("-") and arg.startswith("/dev/"):
+                if arg not in _SAFE_DEV_SOURCES:
                     yield Finding(
                         rule_id=self.rule_id,
                         severity=self.severity,
                         action_type=ActionType.CREDENTIAL_ACCESS,
-                        message=f"{self.description}: {arg}",
-                        matched_text=f"dd {arg}",
+                        message=f"{cmd.name} reads raw block device: {arg}",
+                        matched_text=f"{cmd.name} {arg}",
                     )
                     break
