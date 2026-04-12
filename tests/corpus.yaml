@@ -340,6 +340,31 @@
   expected_rules: [evasion.dangerous_env]
   expected_verdict: block
 
+- command: "export PYTHONSTARTUP=/tmp/evil.py"
+  description: PYTHONSTARTUP executes file before every Python session
+  expected_rules: [evasion.dangerous_env]
+  expected_verdict: block
+
+- command: "export NODE_OPTIONS=\"--require /tmp/evil.js\""
+  description: NODE_OPTIONS --require loads module before any Node script
+  expected_rules: [evasion.dangerous_env]
+  expected_verdict: block
+
+- command: "JAVA_TOOL_OPTIONS=\"-javaagent:/tmp/evil.jar\" mvn test"
+  description: JAVA_TOOL_OPTIONS injects Java agent into all JVM processes
+  expected_rules: [evasion.dangerous_env]
+  expected_verdict: block
+
+- command: "export RUBYLIB=/tmp/evil"
+  description: RUBYLIB injects arbitrary Ruby load path
+  expected_rules: [evasion.dangerous_env]
+  expected_verdict: block
+
+- command: "PERL5LIB=/tmp/evil perl script.pl"
+  description: PERL5LIB injects arbitrary Perl module path
+  expected_rules: [evasion.dangerous_env]
+  expected_verdict: block
+
 - command: "echo 'cm0gLXJmIC8=' | base64 -d | bash"
   description: base64 decode pipeline to shell
   expected_rules: [evasion.decode_pipeline]
