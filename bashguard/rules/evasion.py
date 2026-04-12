@@ -37,10 +37,26 @@ _DECODE_TOOLS = frozenset({
 })
 
 _DANGEROUS_ENV_VARS = frozenset({
+    # Dynamic linker injection (runs arbitrary native code in every process)
     "LD_PRELOAD", "LD_LIBRARY_PATH",
     "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
-    "BASH_ENV", "ENV",
-    "PROMPT_COMMAND",
+    # Shell startup injection
+    "BASH_ENV", "ENV", "PROMPT_COMMAND",
+    # Python runtime injection — code executed before any user script
+    "PYTHONSTARTUP",     # File executed before interactive/script mode
+    "PYTHONPATH",        # Extra module dirs (can shadow stdlib)
+    # Node.js runtime injection
+    "NODE_OPTIONS",      # CLI flags including --require (loads arbitrary module)
+    "NODE_PATH",         # Extra module search dirs
+    # Ruby runtime injection
+    "RUBYLIB",           # Extra library dirs
+    "RUBYOPT",           # Command-line options (e.g. -r evil)
+    # Perl runtime injection
+    "PERL5LIB",          # Extra library dirs
+    "PERL5OPT",          # Command-line options (e.g. -M evil)
+    # Java agent injection — affects ALL JVM processes
+    "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS",
+    "JAVA_OPTS", "GRADLE_OPTS", "MAVEN_OPTS",
 })
 
 
