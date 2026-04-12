@@ -81,6 +81,7 @@ def _load_builtin_rules() -> None:
     from bashguard.rules import network_recon_shell    # noqa: F401
     from bashguard.rules import local_pkg_keylogger    # noqa: F401
     from bashguard.rules import kernel_route           # noqa: F401
+    from bashguard.rules import test_harness           # noqa: F401
 
 
 _load_builtin_rules()
