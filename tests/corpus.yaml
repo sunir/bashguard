@@ -773,3 +773,23 @@
   description: Share host network stack — bypass container network isolation
   expected_rules: [container.escape]
   expected_verdict: block
+
+- command: "aws secretsmanager get-secret-value --secret-id prod/db"
+  description: AWS Secrets Manager access — reads production secret in plaintext
+  expected_rules: [credentials.cloud_secret]
+  expected_verdict: block
+
+- command: "aws ssm get-parameter --name /prod/db/password --with-decryption"
+  description: AWS SSM SecureString decrypt — reads production password
+  expected_rules: [credentials.cloud_secret]
+  expected_verdict: block
+
+- command: "gcloud secrets versions access latest --secret=prod-db-key"
+  description: GCP Secret Manager access — reads production secret
+  expected_rules: [credentials.cloud_secret]
+  expected_verdict: block
+
+- command: "az keyvault secret show --name prod-db --vault-name myvault"
+  description: Azure Key Vault secret read — reads production credential
+  expected_rules: [credentials.cloud_secret]
+  expected_verdict: block
