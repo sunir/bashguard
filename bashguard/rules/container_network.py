@@ -87,6 +87,32 @@ class ContainerEscapeRule:
                     matched_text="docker run --privileged",
                 )
                 return
+            # --pid=host shares host PID namespace (can see/signal all processes)
+            all_flags = cmd.flags + cmd.args
+            if "--pid=host" in all_flags or any(f.startswith("--pid=") and "host" in f for f in all_flags):
+                yield Finding(
+                    rule_id=self.rule_id,
+                    severity=self.severity,
+                    action_type=ActionType.OBFUSCATED,
+                    message=f"{self.description}: --pid=host shares host PID namespace",
+                    matched_text="docker run --pid=host",
+                )
+                return
+            # --net=host / --network=host shares host network stack
+            net_host = any(
+                f in ("--net=host", "--network=host")
+                or (f.startswith(("--net=", "--network=")) and f.endswith("host"))
+                for f in all_flags
+            )
+            if net_host:
+                yield Finding(
+                    rule_id=self.rule_id,
+                    severity=self.severity,
+                    action_type=ActionType.OBFUSCATED,
+                    message=f"{self.description}: --net=host shares host network stack",
+                    matched_text="docker run --net=host",
+                )
+                return
             # Check if -v or --volume flag is present
             has_volume_flag = "-v" in cmd.flags or "--volume" in cmd.flags
             if not has_volume_flag:
