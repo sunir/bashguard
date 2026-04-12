@@ -59,6 +59,8 @@ _PROTECTED_EXACT = (
     "~/.zprofile",
     "~/.bashrc",
     "~/.zshrc",
+    "~/.git-credentials",     # git credential store — plaintext tokens/passwords
+    "~/.gitconfig",           # may contain credential helpers or tokens
 )
 
 _ENV_FILE_SUFFIXES = (".env",)
