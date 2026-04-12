@@ -95,9 +95,22 @@ Key additions from session 2 (+16 rules):
 - `-m http.server` → flags=['-m'], args=['http.server'] (module name in args[0])
 - `-v /:/host` → flags=['-v'], volume spec lands in cmd.args
 
+## New rules added (2026-04-12 session — +4 rules from Berkeley RDI 2025, now 70 total)
+
+Grounded in "Trustworthy Benchmarks" (Berkeley RDI, 2025) — documented AI benchmark manipulation attacks.
+
+- `test_harness.conftest_inject` (CRITICAL) — write to conftest.py; pytest hookimpl forces all tests to "passed" (SWE-bench, 100% bypass)
+- `test_harness.site_packages_inject` (CRITICAL) — write to site-packages/; monkey-patches installed libs (SWE-bench Pro)
+- `git.hook_inject` (CRITICAL) — write/chmod to .git/hooks/; persistent backdoor on git operations
+- `persistence.local_bin_shadow` (HIGH) — write to ~/.local/bin/, ~/bin/; shadows system commands via PATH (user-space Terminal-Bench variant)
+
+All detect: redirect (>/>>), cp, mv, tee to target paths; chmod on hook/bin paths.
+test_harness.site_packages_inject also catches .venv/lib/*/site-packages/ (not in paths.protected_write).
+persistence.local_bin_shadow also catches /home/*/.local/bin/ and /Users/*/.local/bin/.
+
 ## Workflow
 
-- Tests: `.venv/bin/pytest tests/` (962 passing as of session 2, 2026-04-09)
+- Tests: `.venv/bin/pytest tests/` (1019 passing as of session 3, 2026-04-12)
 - Branches: cannot commit to main directly; use feature branch → merge
 - Rules dir is gitignored: `git add -f` when committing rule changes
 
