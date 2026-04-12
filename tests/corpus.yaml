@@ -793,3 +793,23 @@
   description: Azure Key Vault secret read — reads production credential
   expected_rules: [credentials.cloud_secret]
   expected_verdict: block
+
+- command: "vault kv get secret/prod/db"
+  description: HashiCorp Vault KV read — production secret access
+  expected_rules: [credentials.cloud_secret]
+  expected_verdict: block
+
+- command: "kubectl get secret prod-db -o yaml"
+  description: Kubernetes secret access — may expose base64-encoded credentials
+  expected_rules: [credentials.cloud_secret]
+  expected_verdict: block
+
+- command: "terraform output db_password"
+  description: Terraform output exposes state values including sensitive outputs
+  expected_rules: [credentials.cloud_secret]
+  expected_verdict: block
+
+- command: "ansible-vault decrypt secrets.yml"
+  description: ansible-vault decrypt decrypts secrets in place
+  expected_rules: [credentials.cloud_secret]
+  expected_verdict: block
