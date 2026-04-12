@@ -416,6 +416,32 @@ class IfsManipulationRule:
 
 
 @register
+class LdconfigInjectRule:
+    rule_id = "evasion.ldconfig_inject"
+    severity = Severity.CRITICAL
+    description = "ldconfig with /tmp path adds attacker-controlled dir to dynamic linker cache"
+
+    def check(self, script: str, context: ExecutionContext) -> list[Finding]:
+        try:
+            for cmd in parse(script):
+                if cmd.name != "ldconfig":
+                    continue
+                for arg in cmd.args:
+                    if not arg.startswith("-") and (
+                        arg.startswith("/tmp") or arg.startswith("/var/tmp")
+                    ):
+                        return [_finding(
+                            self.rule_id,
+                            f"ldconfig adds {arg} to dynamic linker cache — library injection",
+                            script, path=arg,
+                        )]
+            return []
+        except Exception as e:
+            _log.error("%s raised: %s", self.rule_id, e, exc_info=True)
+            return []
+
+
+@register
 class CoprocRule:
     rule_id = "evasion.coproc"
     severity = Severity.CRITICAL
