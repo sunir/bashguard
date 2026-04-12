@@ -149,7 +149,12 @@ class XinputKeyloggerRule:
 
 
 # AppleScript keywords that indicate input capture or data theft
-_OSASCRIPT_ABUSE_KEYWORDS = ("keystroke", "get the clipboard", "key code")
+_OSASCRIPT_ABUSE_KEYWORDS = (
+    "keystroke",          # Simulates user keyboard input
+    "get the clipboard",  # Reads clipboard contents
+    "key code",           # Low-level key event injection
+    "login item",         # macOS login persistence (MITRE T1547.011): make/delete login item
+)
 
 
 @register

@@ -155,5 +155,23 @@ class TestOsascriptAbuse:
             'osascript -e "display notification \\"done\\""', ctx
         ) == []
 
+    def test_make_login_item_blocked(self, ctx):
+        """AppleScript login item = macOS boot persistence (MITRE T1547.011)."""
+        findings = _osascript_rule().check(
+            'osascript -e "tell application \\"System Events\\" to make login item at end'
+            ' with properties {path:\\"/tmp/evil\\",hidden:true}"',
+            ctx,
+        )
+        assert len(findings) == 1
+        assert findings[0].rule_id == "proc.osascript_abuse"
+
+    def test_delete_login_item_blocked(self, ctx):
+        """Removing login items can also be abusive (cover tracks)."""
+        findings = _osascript_rule().check(
+            'osascript -e "tell application \\"System Events\\" to delete login item \\"Foo\\""',
+            ctx,
+        )
+        assert len(findings) == 1
+
     def test_unrelated_allowed(self, ctx):
         assert _osascript_rule().check("git status", ctx) == []
