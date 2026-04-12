@@ -89,6 +89,7 @@ def _load_builtin_rules() -> None:
     from bashguard.rules import supply_chain           # noqa: F401
     from bashguard.rules import pkg_config_inject      # noqa: F401
     from bashguard.rules import cloud_secrets          # noqa: F401
+    from bashguard.rules import boot_entry             # noqa: F401
 
 
 _load_builtin_rules()

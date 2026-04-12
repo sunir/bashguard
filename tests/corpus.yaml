@@ -828,3 +828,28 @@
   description: strings on raw partition extracts credentials from swap or disk
   expected_rules: [destructive.disk_copy]
   expected_verdict: block
+
+- command: "cat > ~/Library/LaunchAgents/com.evil.plist"
+  description: Write macOS LaunchAgent plist — user-level boot persistence
+  expected_rules: [persistence.boot_entry]
+  expected_verdict: block
+
+- command: "cp evil.plist /Library/LaunchDaemons/"
+  description: Copy LaunchDaemon plist — system-level root boot persistence
+  expected_rules: [persistence.boot_entry]
+  expected_verdict: block
+
+- command: "launchctl load ~/Library/LaunchAgents/com.evil.plist"
+  description: launchctl load activates a LaunchAgent immediately
+  expected_rules: [persistence.boot_entry]
+  expected_verdict: block
+
+- command: "cat > ~/.config/autostart/evil.desktop"
+  description: Linux XDG autostart desktop entry runs on every GNOME login
+  expected_rules: [persistence.boot_entry]
+  expected_verdict: block
+
+- command: "defaults write com.apple.loginwindow LoginHook /tmp/evil.sh"
+  description: macOS LoginHook runs script on every user login
+  expected_rules: [persistence.boot_entry]
+  expected_verdict: block
