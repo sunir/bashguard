@@ -1,2 +1,8 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")/.." && exec python3 -m bashguard.cli "$@"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENV_PYTHON="${REPO_ROOT}/.venv/bin/python"
+if [[ -x "$VENV_PYTHON" ]]; then
+    exec "$VENV_PYTHON" -m bashguard.cli "$@"
+else
+    exec python3 -m bashguard.cli "$@"
+fi
