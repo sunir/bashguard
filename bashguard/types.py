@@ -178,6 +178,10 @@ class Entry(Document):
         """Dispatch to Claude Code integration subcommands."""
         return ClaudeSetup()
 
+    def new_run(self) -> "RunScript":
+        """Create a RunScript for sandboxed execution mode."""
+        return RunScript()
+
     def __str__(self) -> str:
         return ""
 
@@ -288,6 +292,66 @@ class ClaudeSetup(Document):
         links = install_all_hooks()
         lines = "\n".join(f"Installed: {p}" for p in links)
         return Output(text=lines)
+
+    def __str__(self) -> str:
+        return ""
+
+
+class RunScript(Document):
+    """Run mode — audit then execute in seatbelt sandbox, return JSON result."""
+
+    def execute_command(self, cmd: str) -> "Output":
+        """Audit cmd; if safe, run it under seatbelt and return JSON {verdict, stdout, stderr, exit_code}."""
+        import os
+        findings, verdict = _run_audit(cmd)
+        log_verdict(verdict, command=cmd)
+
+        if verdict.verdict == VerdictType.BLOCK:
+            payload = {
+                "verdict": "block",
+                "reason": verdict.message,
+                "findings": [
+                    {"rule_id": f.rule_id, "severity": f.severity.value, "message": f.message}
+                    for f in findings
+                ],
+            }
+            return Output(text=json.dumps(payload, indent=2), exit_code=2)
+
+        if verdict.verdict == VerdictType.CONFIRM:
+            payload = {
+                "verdict": "confirm",
+                "reason": verdict.confirmation_prompt or verdict.message,
+                "findings": [
+                    {"rule_id": f.rule_id, "severity": f.severity.value, "message": f.message}
+                    for f in findings
+                ],
+            }
+            return Output(text=json.dumps(payload, indent=2), exit_code=1)
+
+        # ALLOW: run under seatbelt
+        from bashguard.credentials import load_and_substitute
+        from bashguard.seatbelt import run_sandboxed
+        rewritten = load_and_substitute(cmd)
+        project_path = Path(os.getcwd())
+
+        if os.environ.get("BASHGUARD_SEATBELT") == "0":
+            import subprocess
+            result = subprocess.run(
+                ["/bin/bash", "-c", rewritten],
+                capture_output=True, text=True,
+            )
+            proc_rc, proc_out, proc_err = result.returncode, result.stdout, result.stderr
+        else:
+            result = run_sandboxed(["/bin/bash", "-c", rewritten], project_path=project_path)
+            proc_rc, proc_out, proc_err = result.returncode, result.stdout, result.stderr
+
+        payload = {
+            "verdict": "allow",
+            "exit_code": proc_rc,
+            "stdout": proc_out,
+            "stderr": proc_err,
+        }
+        return Output(text=json.dumps(payload, indent=2), exit_code=proc_rc)
 
     def __str__(self) -> str:
         return ""
