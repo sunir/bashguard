@@ -10,7 +10,7 @@ transcripts/
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-04-28 08:31:21
+# Last sync: 2026-05-02 00:12:05
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -38,6 +38,7 @@ transcripts/
 .claude/hooks/SubagentStop
 .claude/hooks/UserPromptSubmit
 .claude/hooks/lib/
+.claude/settings.json
 .claude/worktrees/
 .codex/
 .colony
@@ -76,7 +77,6 @@ venv/
 # Require patterns (must track)
 !.claude/commands/
 !.claude/hooks/
-!.claude/settings.json
 !CLAUDE.md
 !core/emoji
 !core/focus.md
