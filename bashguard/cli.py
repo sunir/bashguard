@@ -20,13 +20,14 @@ from pathlib import Path
 
 from data_grammar import DataGrammar, ParseError, ExecutionError, UserError
 
-from bashguard.types import AnalyzeScript, ClaudeSetup, Entry, LogQuery, Output, StatsQuery
+from bashguard.types import AnalyzeScript, ClaudeSetup, Entry, LogQuery, Output, RunScript, StatsQuery
 
 _GRAMMAR = Path(__file__).parent / "grammar.bnf"
 
 _TYPES = {
     "Entry": Entry,
     "AnalyzeScript": AnalyzeScript,
+    "RunScript": RunScript,
     "ClaudeSetup": ClaudeSetup,
     "StatsQuery": StatsQuery,
     "LogQuery": LogQuery,
@@ -49,14 +50,22 @@ def main() -> int:
         output = buf.getvalue()
         sys.stdout.write(output)
 
-        # Colony PreToolUse dispatcher uses exit code 2 to block — JSON deny alone is swallowed.
-        # Detect deny verdict from output to return the correct exit code.
+        # Colony PreToolUse dispatcher uses exit code 2 to block.
+        # run mode propagates the executed command's exit code directly.
         if output.strip():
             try:
                 data = _json.loads(output)
                 if data.get("permissionDecision") == "deny":
                     return 2
-            except (_json.JSONDecodeError, AttributeError):
+                # run mode: propagate executed command exit code or block/confirm codes
+                verdict = data.get("verdict")
+                if verdict == "block":
+                    return 2
+                if verdict == "confirm":
+                    return 1
+                if verdict == "allow" and "exit_code" in data:
+                    return int(data["exit_code"])
+            except (_json.JSONDecodeError, AttributeError, ValueError):
                 pass
         return 0
 

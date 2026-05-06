@@ -64,6 +64,14 @@ Entry = "hook" @required :hook_mode > Output
             "bashguard log -n 20"
           ]
         })
+      | "run" @required :new_run > RunScript
+        @help({
+          "description": "Audit then execute a command in a seatbelt sandbox; return JSON {verdict, stdout, stderr, exit_code}",
+          "examples": [
+            "bashguard run --command 'git status'",
+            "bashguard run -c 'pytest tests/'"
+          ]
+        })
       | "claude" @required :claude_subcommand > ClaudeSetup
         @help({
           "description": "Claude Code integration commands",
@@ -87,5 +95,8 @@ LogQuery = ("--verdict" | "-v") &verdict<TEXT> :filter_verdict > LogQuery
 AnalyzeScript = ("--command" | "-c") &cmd<TEXT> :analyze_command > Output
               | "--file" &path<TEXT> :analyze_file > Output
               ;
+
+RunScript = ("--command" | "-c") &cmd<TEXT> :execute_command > Output
+          ;
 
 Output = @end ;
