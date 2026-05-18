@@ -27,3 +27,6 @@ packages = ["bashguard"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+data-grammar = {path = "../data-grammar"}
