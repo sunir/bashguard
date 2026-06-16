@@ -9,6 +9,12 @@
 
 @import("stdlib.bnf", "stdlib")
 
+# compile:allow flag-outside-flags
+# AnalyzeScript, RunScript, StatsQuery, and LogQuery use flag-style literals
+# as data-flow selectors (--command/-c/--file choose WHAT to operate on;
+# --days/--json/--verdict/--rule/--limit are query parameters intrinsic to
+# each type). These are intentional per-subcommand options, not global meta-flags.
+
 @start = Entry @help({
   "tool": "bash-ast",
   "description": "Bash command security auditor for LLM agent sandboxing",
