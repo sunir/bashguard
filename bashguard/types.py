@@ -203,86 +203,6 @@ class AnalyzeScript(Document):
         return ""
 
 
-class StatsQuery(Document):
-    """Stats query mode — aggregate audit log statistics."""
-
-    def __init__(self, **kwargs):
-        self._days: int | None = None
-        self._as_json: bool = False
-
-    def set_days(self, days: str) -> "StatsQuery":
-        self._days = int(days)
-        return self
-
-    def use_json(self) -> "StatsQuery":
-        self._as_json = True
-        return self
-
-    def __str__(self) -> str:
-        stats = compute_stats(days=self._days)
-        if self._as_json:
-            return json.dumps(stats, indent=2)
-        lines = [
-            f"Total audited:  {stats['total']}",
-            f"Block rate:     {stats['block_rate']:.1%}",
-            "",
-            "By verdict:",
-        ]
-        for verdict, count in sorted(stats["by_verdict"].items()):
-            lines.append(f"  {verdict:10} {count}")
-        if stats["by_rule"]:
-            lines.append("")
-            lines.append("Top rules triggered:")
-            for rule_id, count in sorted(stats["by_rule"].items(),
-                                          key=lambda x: -x[1])[:10]:
-                lines.append(f"  {rule_id:40} {count}")
-        return "\n".join(lines)
-
-
-class LogQuery(Document):
-    """Log query mode — filters and displays audit log entries."""
-
-    def __init__(self, **kwargs):
-        self._verdict_filter: str | None = None
-        self._rule_filter: str | None = None
-        self._limit: int | None = None
-        self._as_json: bool = False
-
-    def filter_verdict(self, verdict: str) -> "LogQuery":
-        self._verdict_filter = verdict.lower()
-        return self
-
-    def filter_rule(self, rule_id: str) -> "LogQuery":
-        self._rule_filter = rule_id
-        return self
-
-    def set_limit(self, n: str) -> "LogQuery":
-        self._limit = int(n)
-        return self
-
-    def use_json(self) -> "LogQuery":
-        self._as_json = True
-        return self
-
-    def __str__(self) -> str:
-        entries = list(read_log(
-            decision=self._verdict_filter,
-            rule_id=self._rule_filter,
-            limit=self._limit,
-        ))
-        if self._as_json:
-            return json.dumps(entries, indent=2)
-        # Human-readable table
-        lines = []
-        for e in entries:
-            ts = e.get("timestamp", "")[:19].replace("T", " ")
-            verdict = e.get("verdict", "?").upper()
-            cmd = e.get("command", "")[:60]
-            rules = ", ".join(f["rule_id"] for f in e.get("findings", []))
-            lines.append(f"{ts}  {verdict:8}  {cmd:<60}  {rules}")
-        return "\n".join(lines)
-
-
 class ClaudeSetup(Document):
     """Claude Code integration — installs all bashguard hook plugins."""
 
@@ -355,6 +275,95 @@ class RunScript(Document):
 
     def __str__(self) -> str:
         return ""
+
+
+class StatsQuery(Document):
+    """Stats query mode — aggregate audit log statistics.
+
+    Story: BG-CLI-FLAGS-VALIDATION — flag-style options (--days, --json) are
+    query parameters intrinsic to this subcommand, declared with
+    # compile:allow flag-outside-flags in grammar.bnf.
+    """
+
+    def __init__(self, **kwargs):
+        self._days: int | None = None
+        self._as_json: bool = False
+
+    def set_days(self, days: str) -> "StatsQuery":
+        self._days = int(days)
+        return self
+
+    def use_json(self) -> "StatsQuery":
+        self._as_json = True
+        return self
+
+    def __str__(self) -> str:
+        stats = compute_stats(days=self._days)
+        if self._as_json:
+            return json.dumps(stats, indent=2)
+        lines = [
+            f"Total audited:  {stats['total']}",
+            f"Block rate:     {stats['block_rate']:.1%}",
+            "",
+            "By verdict:",
+        ]
+        for verdict, count in sorted(stats["by_verdict"].items()):
+            lines.append(f"  {verdict:10} {count}")
+        if stats["by_rule"]:
+            lines.append("")
+            lines.append("Top rules triggered:")
+            for rule_id, count in sorted(stats["by_rule"].items(),
+                                          key=lambda x: -x[1])[:10]:
+                lines.append(f"  {rule_id:40} {count}")
+        return "\n".join(lines)
+
+
+class LogQuery(Document):
+    """Log query mode — filters and displays audit log entries.
+
+    Story: BG-CLI-FLAGS-VALIDATION — flag-style options (--verdict, --rule,
+    --limit, --json) are query parameters intrinsic to this subcommand,
+    declared with # compile:allow flag-outside-flags in grammar.bnf.
+    """
+
+    def __init__(self, **kwargs):
+        self._verdict_filter: str | None = None
+        self._rule_filter: str | None = None
+        self._limit: int | None = None
+        self._as_json: bool = False
+
+    def filter_verdict(self, verdict: str) -> "LogQuery":
+        self._verdict_filter = verdict.lower()
+        return self
+
+    def filter_rule(self, rule_id: str) -> "LogQuery":
+        self._rule_filter = rule_id
+        return self
+
+    def set_limit(self, n: str) -> "LogQuery":
+        self._limit = int(n)
+        return self
+
+    def use_json(self) -> "LogQuery":
+        self._as_json = True
+        return self
+
+    def __str__(self) -> str:
+        entries = list(read_log(
+            decision=self._verdict_filter,
+            rule_id=self._rule_filter,
+            limit=self._limit,
+        ))
+        if self._as_json:
+            return json.dumps(entries, indent=2)
+        lines = []
+        for e in entries:
+            ts = e.get("timestamp", "")[:19].replace("T", " ")
+            verdict = e.get("verdict", "?").upper()
+            cmd = e.get("command", "")[:60]
+            rules = ", ".join(f["rule_id"] for f in e.get("findings", []))
+            lines.append(f"{ts}  {verdict:8}  {cmd:<60}  {rules}")
+        return "\n".join(lines)
 
 
 class Output(BaseOutput):
