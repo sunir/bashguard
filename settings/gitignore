@@ -1,0 +1,64 @@
+# Family Member Repository - Standard .gitignore
+/heuristics/
+# /family_member/ - obsolete in colony system
+
+# Mail system - keep structure, ignore content
+mail/new/*
+mail/cur/*
+mail/tmp/*
+!mail/new/.gitkeep
+!mail/cur/.gitkeep
+!mail/tmp/.gitkeep
+!mail/README.md
+
+# Session artifacts
+*.log
+artifacts.tmp/
+settings/.*
+CLAUDE.md
+settings/runtime-config.json
+
+# Personal state files
+CLAUDE.md
+.automode*
+.claude/settings.local.json
+
+# Temporary files
+*.tmp
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+
+# Node modules if needed
+node_modules/
+
+
+.claude/.claude
+CLAUDE.md
+settings/runtime-config.json
+.claude/settings.json
+.claude/commands/wakeup.md
+.claude/commands/sleep.md
+.todo_venv/
+
+# Ephemeral status files (generated content, not authored)
+core/.todo-statusline
+core/.rag-statusline
+core/compressed-context.json
+settings/CRITICAL_RULE.md
