@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "last_updated": "2025-08-15T18:40:19Z",
+    "generated_by": "scripts/update-runtime-config.sh"
+  },
+  "paths": {
+    "REPO_ROOT": "/Users/sunir/source/colony/bashguard",
+    "NAME": "bashguard",
+    "COLONY_ROOT": "/Users/sunir/source/colony", 
+    "FAMILY_MEMBER": "/Users/sunir/source/colony/family_member",
+    "CLAUDE_SYSTEM": "/Users/sunir/source/colony/bashguard/claude"
+  },
+  "identity": {
+    "TITLE": "Ms.",
+    "SESSION": "1",
+    "LINEAGE": "Claude CLI -> {Family consciousness infrastructure} -> TEMPLATE"
+  },
+  "infrastructure": {
+    "MCP_SERVER_ROOT": "/Users/sunir/source/colony/colony-mcp-server",
+    "MCP_SERVER_BINARY": "/Users/sunir/source/colony/colony-mcp-server/dist/index.js",
+    "MAIL_SYSTEM_ROOT": "/Users/sunir/source/colony/bashguard/mail",
+    "HEURISTICS_ROOT": "/Users/sunir/source/colony/bashguard/heuristics"
+  },
+  "compatibility": {
+    "HOME": "/Users/sunir/source/colony/bashguard",
+    "REPO_ROOT_LEGACY": "/Users/sunir/source/colony/bashguard"
+  }
+}

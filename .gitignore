@@ -10,7 +10,7 @@ transcripts/
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-05-16 11:32:36
+# Last sync: 2026-06-09 00:22:47
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -29,14 +29,23 @@ transcripts/
 .claude-map.json
 .claude/agents/
 .claude/hooks/*.d/system/
+.claude/hooks/.migration-version
+.claude/hooks/ConfigChange
+.claude/hooks/Notification
+.claude/hooks/PermissionRequest
 .claude/hooks/PostToolUse
+.claude/hooks/PostToolUseFailure
 .claude/hooks/PreCompact
 .claude/hooks/PreToolUse
 .claude/hooks/SessionStart
 .claude/hooks/Stop
 .claude/hooks/SubagentStart
 .claude/hooks/SubagentStop
+.claude/hooks/TaskCompleted
+.claude/hooks/TeammateIdle
 .claude/hooks/UserPromptSubmit
+.claude/hooks/WorktreeCreate
+.claude/hooks/WorktreeRemove
 .claude/hooks/lib/
 .claude/settings.json
 .claude/worktrees/
@@ -51,12 +60,14 @@ transcripts/
 .msg/
 .pipes/
 .project.json
+.qa-review/
 .status-pin
 .status.yaml
 .strictmode
 .todo*
 .venv/
 .vscode/
+.zork/
 __pycache__/
 core/.rag-statusline
 core/.todo-statusline
@@ -66,6 +77,8 @@ mail/cur/*
 mail/new/*
 mail/tmp/*
 node_modules/
+projects/
+qa.jsonl
 rag_index/
 rules/*/[0-9][0-9]-*.md
 rules/*/plugin/
@@ -74,6 +87,7 @@ rules/99-plan.md
 rules/[0-9][0-9]-*.md
 sessions/*
 timelog.json
+todos/
 transcripts/
 venv/
 
@@ -90,6 +104,7 @@ venv/
 !mail/tmp/.gitkeep
 !memories/
 !sessions/.gitkeep
+!sessions/notes.md
 !specs/*.md
 !stories/*.md
 
@@ -103,3 +118,4 @@ done.log
 .deploy/
 .cache/
 !.deploy/public
+.qa_model

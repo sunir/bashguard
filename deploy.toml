@@ -1,0 +1,6 @@
+[package]
+name = "bashguard"
+shape = "bin"
+
+[bin]
+bashguard = "bin/bashguard"
