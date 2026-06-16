@@ -29,6 +29,12 @@ _INTERP_EXEC_FLAGS: dict[str, str] = {
     "perl": "-e", "ruby": "-e",
     "node": "-e", "nodejs": "-e",
     "php": "-r",
+    # GTFOBins-verified interpreters with inline code flags
+    "lua": "-e", "lua5.1": "-e", "lua5.2": "-e", "lua5.3": "-e", "lua5.4": "-e",
+    "R": "-e", "Rscript": "-e",
+    "guile": "-c",
+    "julia": "-e",
+    "groovy": "-e",
 }
 
 _DECODE_TOOLS = frozenset({
