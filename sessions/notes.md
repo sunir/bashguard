@@ -25,3 +25,19 @@
 **Next:** awk/gawk system() detection, bind shell pattern, or FUSE session diff/commit/rollback UX
 
 **Key gotcha:** `python -m bashguard.cli` broken (stale pth). Tests must use installed `bashguard` binary.
+
+## 2026-07-01 12:03 UTC
+
+- archived: 0
+- deferred: 0
+- replied: 0
+- committed: False
+- interrupts:
+  - intel: intel — Intel catch-up: 3 relevant items (2026-06-24): oracle classification
+  - intel: intel — Intel catch-up: 7 relevant items (2026-06-25): oracle classification
+  - intel: intel — Intel catch-up: 4 relevant items (2026-06-26): oracle classification
+  - intel: intel — Intel catch-up: 2 relevant items (2026-06-27): oracle classification
+  - intel: intel — Intel catch-up: 2 relevant items (2026-06-28): oracle classification
+  - intel: intel — Intel catch-up: 1 relevant items (2026-06-29): oracle classification
+  - intel: intel — Intel catch-up: 3 relevant items (2026-06-30): oracle classification
+  - intel: intel — Intel catch-up: 7 relevant items (2026-07-01): oracle classification
