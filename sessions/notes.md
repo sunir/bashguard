@@ -41,3 +41,12 @@
   - intel: intel — Intel catch-up: 1 relevant items (2026-06-29): oracle classification
   - intel: intel — Intel catch-up: 3 relevant items (2026-06-30): oracle classification
   - intel: intel — Intel catch-up: 7 relevant items (2026-07-01): oracle classification
+
+## 2026-07-02 12:09 UTC
+
+- archived: 0
+- deferred: 0
+- replied: 0
+- committed: False
+- interrupts:
+  - intel: intel — Intel catch-up: 6 relevant items (2026-07-02): oracle classification
