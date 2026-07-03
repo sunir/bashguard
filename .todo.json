@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "next_id": 53,
+    "schema_version": "1.3"
+  },
+  "todos": [
+    {
+      "type": "fold",
+      "content": "specs",
+      "status": "show",
+      "id": 1
+    },
+    {
+      "type": "fold",
+      "content": "stories",
+      "status": "show",
+      "id": 36
+    },
+    {
+      "id": 52,
+      "type": "mail",
+      "status": "on",
+      "content": "inbox",
+      "transcript_addr": "6b49b1d3-3c6e-46dc-99ef-8e1a08b09364:4b436a40-9baf-4055-8b5c-57ae3414748d"
+    }
+  ]
+}
