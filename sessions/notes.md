@@ -59,3 +59,12 @@
 - committed: True
 - interrupts:
   - intel: intel — Intel catch-up: 2 relevant items (2026-07-03): oracle classification
+
+## 2026-07-04 12:04 UTC
+
+- archived: 0
+- deferred: 0
+- replied: 0
+- committed: True
+- interrupts:
+  - intel: intel — Intel catch-up: 3 relevant items (2026-07-04): oracle classification
