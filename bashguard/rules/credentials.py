@@ -67,6 +67,15 @@ _ENV_FILE_SUFFIXES = (".env",)
 _ENV_FILE_NAMES = {".env"}
 
 
+def _extract_path(arg: str) -> str:
+    """Extract the path value from a key=value argument like dd's if=/etc/shadow."""
+    if "=" in arg:
+        _, _, val = arg.partition("=")
+        if val.startswith("/") or val.startswith("~"):
+            return val
+    return arg
+
+
 def _is_protected(path: str, home: str) -> bool:
     expanded = path.replace("~", home)
     raw = path
@@ -106,7 +115,8 @@ class CredentialsRule:
             for cmd in cmds:
                 all_paths = cmd.args + cmd.flags + cmd.redirect_targets
                 for path in all_paths:
-                    clean = path.strip("'\"").lstrip("@")
+                    # Story: DD-KEYVAL-PATH — extract path from key=value args
+                    clean = _extract_path(path.strip("'\"").lstrip("@"))
                     if _is_protected(clean, home):
                         findings.append(Finding(
                             rule_id=self.rule_id,
