@@ -46,14 +46,16 @@ class TestFailOpen:
     # Story: CONTRACT-ENFORCEMENT-HOOK
 
     def test_missing_directory_silent_allow(self, tmp_path: Path) -> None:
-        code, out, err = _run("Bash", {"command": "ls"}, str(tmp_path))
+        code, out, err = _run("Write", {"file_path": str(tmp_path / "f.py")}, str(tmp_path))
         assert code == 0
         assert err == ""
 
-    def test_non_bash_tool_silent_allow(self, tmp_path: Path) -> None:
-        code, out, err = _run("TaskCreate", {}, str(tmp_path))
-        assert code == 0
-        assert err == ""
+    def test_non_write_tool_silent_allow(self, tmp_path: Path) -> None:
+        """Bash, Read, TaskCreate — not write-class tools — are always silent."""
+        for tool in ("Bash", "Read", "TaskCreate"):
+            code, out, err = _run(tool, {}, str(tmp_path))
+            assert code == 0, f"{tool} should exit 0"
+            assert err == "", f"{tool} should produce no stderr"
 
     def test_always_exits_0(self, tmp_path: Path) -> None:
         """Even with a violation, exit 0 — advisory only."""
@@ -93,8 +95,9 @@ class TestStaleDirectory:
         dir_path.mkdir(parents=True)
         (dir_path / "directory.json").write_text(json.dumps(DIRECTORY_STALE))
 
-        code, out, err = _run("Bash", {"command": "ls"}, str(bashguard_repo),
-                              colony_root=str(colony_root))
+        # Use Write (a write-class tool) so the hook doesn't exit early
+        code, out, err = _run("Write", {"file_path": str(bashguard_repo / "x.py")},
+                              str(bashguard_repo), colony_root=str(colony_root))
         assert code == 0
         assert "stale" in err.lower()
 

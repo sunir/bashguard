@@ -12,8 +12,11 @@ INPUT=$(cat)
 TOOL_NAME=$(printf '%s' "$INPUT" | python3 -c \
   "import json,sys; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || true)
 
+# Only check write-class tools. Read is almost always legitimate (cross-cutting roles
+# read other repos constantly). Bash cwd-based check is too blunt for cross-cutting
+# roles (deploy legitimately runs in any repo). Skip both.
 case "${TOOL_NAME:-}" in
-  Bash|Write|Edit|MultiEdit|Read) ;;
+  Write|Edit|MultiEdit) ;;
   *) exit 0 ;;
 esac
 
@@ -63,16 +66,13 @@ directory_json = Path(os.environ["DIRECTORY_JSON"])
 directory = load_directory(directory_json)
 
 paths_to_check = []
-if tool_name == "Bash":
-    paths_to_check.append(Path(cwd))
-else:
-    fp = tool_input.get("file_path") or tool_input.get("path")
-    if fp:
-        paths_to_check.append(Path(fp))
-    for edit in tool_input.get("edits", []):
-        fp2 = edit.get("file_path")
-        if fp2:
-            paths_to_check.append(Path(fp2))
+fp = tool_input.get("file_path") or tool_input.get("path")
+if fp:
+    paths_to_check.append(Path(fp))
+for edit in tool_input.get("edits", []):
+    fp2 = edit.get("file_path")
+    if fp2:
+        paths_to_check.append(Path(fp2))
 
 if directory and directory.is_stale():
     print("STALE")
