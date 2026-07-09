@@ -255,7 +255,9 @@ from tree_sitter import Language as _Language, Parser as _TsParser
 _BASH_LANG = _Language(_tsb.language())
 
 _SHELL_INTERPS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
-_SCRIPT_INTERPS = frozenset({"python", "python3", "python2", "ruby", "perl", "node", "nodejs", "php"})
+# Story: TCLSH-INTERPRETER-SHELL — tclsh/wish/expect: exec /bin/sh escape
+_SCRIPT_INTERPS = frozenset({"python", "python3", "python2", "ruby", "perl", "node", "nodejs", "php",
+                              "tclsh", "wish", "expect"})
 
 
 def _get_heredoc_bodies(script: str) -> list[tuple[str, str]]:

@@ -22,7 +22,8 @@ _log = logging.getLogger(__name__)
 _LANG = Language(tsb.language())
 _PARSER = TSParser(_LANG)
 
-_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+# Story: TCLSH-INTERPRETER-SHELL — tclsh/wish/expect added; exec /bin/sh escape
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "tclsh", "wish", "expect"})
 
 _INTERP_EXEC_FLAGS: dict[str, str] = {
     "python": "-c", "python3": "-c", "python2": "-c",
