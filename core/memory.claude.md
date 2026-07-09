@@ -12,7 +12,8 @@
 - EXIT CODE 2 = block; 1 = confirm; 0 = allow. Colony dispatcher reads exit code, not JSON stdout.
 
 ## Rules
-75 rules, 1308 tests (2026-07-09). Full inventory: [[rules-inventory]]
+76 rules, 1336 tests (2026-07-09 session 4). Full inventory: [[rules-inventory]]
+Latest: `evasion.vim_shell` (HIGH) — vim/vi/view/ex/nvim -c ':!cmd', --cmd ':shell', +shell, +!cmd shell escapes. Plain `vim file.txt` allowed.
 
 ## Key gotchas
 - `rules/` in .gitignore — use `git add -f` to commit rule changes
@@ -24,6 +25,7 @@
 - `_extract_path(arg)` strips `key=value` prefix for dd-style args (credentials.privileged_path)
 - nc listen mode: `_is_nc_listen()` returns True when `-l` in flags; `_extract_nc_host()` returns None in listen mode
 - data-grammar lessons: [[data-grammar]]
+- **Parser probe is step 1 for new rules.** Run `parse()` on inputs, print name/args/flags/raw before writing detection. `-c 'cmd'` → flags=['-c'], args=["':cmd'"] (args[0] is the ex-cmd with quotes intact). `+cmd` → in args directly with + prefix.
 
 ## Colony integration
 - `~/.claude/hooks/PreToolUse.d/system/70-bashguard` → symlink to prod hook
@@ -56,7 +58,8 @@ Story written (`stories/contract-enforcement-hook.md`). Two-layer design (Sunir'
 - EXIT CODE 2 = block; 1 = confirm; 0 = allow. Colony dispatcher reads exit code, not JSON stdout.
 
 ## Rules
-75 rules, 1308 tests (2026-07-09). Full inventory: [[rules-inventory]]
+76 rules, 1336 tests (2026-07-09 session 4). Full inventory: [[rules-inventory]]
+Latest: `evasion.vim_shell` (HIGH) — vim/vi/view/ex/nvim -c ':!cmd', --cmd ':shell', +shell, +!cmd shell escapes. Plain `vim file.txt` allowed.
 
 ## Key gotchas
 - `rules/` in .gitignore — use `git add -f` to commit rule changes
@@ -68,6 +71,7 @@ Story written (`stories/contract-enforcement-hook.md`). Two-layer design (Sunir'
 - `_extract_path(arg)` strips `key=value` prefix for dd-style args (credentials.privileged_path)
 - nc listen mode: `_is_nc_listen()` returns True when `-l` in flags; `_extract_nc_host()` returns None in listen mode
 - data-grammar lessons: [[data-grammar]]
+- **Parser probe is step 1 for new rules.** Run `parse()` on inputs, print name/args/flags/raw before writing detection. `-c 'cmd'` → flags=['-c'], args=["':cmd'"] (args[0] is the ex-cmd with quotes intact). `+cmd` → in args directly with + prefix.
 
 ## Colony integration
 - `~/.claude/hooks/PreToolUse.d/system/70-bashguard` → symlink to prod hook
