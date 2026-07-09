@@ -1,4 +1,21 @@
 
+## 2026-07-09 07:01 UTC
+
+**Worked on:** CONTRACT-ENFORCEMENT-HOOK story revision (Sunir's design correction).
+
+**Completed:**
+- Story revised: two-layer design (path-ownership deterministic + Haiku semantic out-of-band)
+- First story version (keyword heuristics) was wrong — corrected before any code written
+- Intel processed: "similarity proposes, consequence disposes" — reinforces advisory-only Haiku design
+
+**Blocked:**
+- sysop: `generated_at` field needed in colony-contracts compiler output
+- the_management: ratify + commit first `the_management/contracts/directory.json`
+
+**Next action:** When directory.json exists at canonical path — write red tests for layer 1 (path-ownership), then implement `hooks/lib/contract_path_check.py`
+
+**Key decision:** Sunir's correction — /contract is semantic, not statically computable. Layer 1 = path-ownership only. Layer 2 = Haiku out-of-band, advisory.
+
 ## 2026-07-09 00:51 UTC
 
 **Worked on:** Worktree-guard PR merge + colony-wide rollout + P11 CONTRACT ENFORCEMENT coordination.

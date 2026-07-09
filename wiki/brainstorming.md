@@ -19,3 +19,12 @@
 - bashguard as contract enforcer for itself: I wrote my own /contract; the recursive enforcement loop is interesting — when I block a command outside my OWNS, am I enforcing my own boundaries or the hook's?
 - tclsh/wish/expect rules landed but `evasion.interpreter_shell` still doesn't cover inline exec — content scanning at heredoc level is the next gap (GTFOBins one-liners)
 - nc listen-mode fix shipped — bind shell pattern (nc -e /bin/sh in listen mode) is the next nc gap
+
+---
+
+## Brainstorm — Session 3 (2026-07-09)
+
+- "similarity proposes, consequence disposes" — the Haiku semantic layer needs a feedback loop eventually; right now it fires and forgets, which means its proposals are never validated. A consequence signal (the_management acking/rejecting alerts) would let it calibrate over time.
+- path-ownership check generalizes beyond contract enforcement: any hook that validates "is this agent in its lane?" could use the same directory.json + colony path convention
+- layer 2 Haiku call could be replaced by a local embedding similarity check if latency becomes an issue — contracts are short, embeddings are fast, no API needed
+- session-questionnaire binary doesn't exist in this repo; would be worth adding to measure cross-session coherence for bashguard specifically
