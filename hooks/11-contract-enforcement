@@ -85,16 +85,40 @@ for p in paths_to_check:
 PYEOF
 ) || true
 
+# Rate-limit alerts: once per (key) per 5-minute window using lock files in /tmp.
+# Key is a slug derived from the alert type; mtime of lock file is the last-fired time.
+_ratelimit_ok() {
+  local key="$1"
+  local window_secs="${2:-300}"  # 5 minutes default
+  local lockdir="/tmp/bashguard-contract-rl"
+  mkdir -p "$lockdir"
+  local lockfile="$lockdir/${key}.lock"
+  if [ -f "$lockfile" ]; then
+    local now mtime age
+    now=$(date +%s)
+    mtime=$(stat -f %m "$lockfile" 2>/dev/null || stat -c %Y "$lockfile" 2>/dev/null || echo 0)
+    age=$(( now - mtime ))
+    [ "$age" -lt "$window_secs" ] && return 1  # too soon
+  fi
+  touch "$lockfile"
+  return 0
+}
+
 case "${RESULT:-}" in
   STALE*)
     echo "[contract-enforcement] directory.json is stale — path check may be outdated" >&2
-    msg alert the_management "contract-enforcement: directory.json stale, regen needed" 2>/dev/null || true
+    if _ratelimit_ok "stale" 300; then
+      msg alert the_management "contract-enforcement: directory.json stale, regen needed" 2>/dev/null || true
+    fi
     ;;
   VIOLATION*)
     FOREIGN=$(printf '%s' "$RESULT" | cut -f2)
     MSG=$(printf '%s' "$RESULT" | cut -f3-)
     echo "[contract-enforcement] $MSG" >&2
-    msg alert the_management "Contract path-ownership: $CURRENT_REPO touching $FOREIGN (advisory)" 2>/dev/null || true
+    RL_KEY="violation-${CURRENT_REPO}-${FOREIGN}"
+    if _ratelimit_ok "$RL_KEY" 300; then
+      msg alert the_management "Contract path-ownership: $CURRENT_REPO touching $FOREIGN (advisory)" 2>/dev/null || true
+    fi
     ;;
 esac
 
