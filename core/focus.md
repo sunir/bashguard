@@ -1,11 +1,11 @@
 # bashguard — Focus
 
-## Current Status (2026-07-09)
+## Current Status (2026-07-09, session 4)
 
 **Hook enforcement: WORKING.** Exit code 2 on BLOCK. Colony dispatcher respects it.
 
 **Defense stack: COMPLETE.**
-- Layer 1: Rule audit (semantic detection) — 75 rules, 1308 tests
+- Layer 1: Rule audit (semantic detection) — 76 rules, 1336 tests
 - Layer 2: Credential injection (placeholder substitution)
 - Layer 3: Seatbelt (sandbox-exec kernel enforcement)
 - Layer 4: FUSE shadow FS (CoW overlay, W3-W5 complete — spike only)
@@ -18,8 +18,8 @@ All key threat patterns BLOCK correctly. Remaining gaps above bash parsing level
 - W1-W5 complete (FUSE passthrough → shadow → ACL → token auth → session CLI)
 - Hook exit code 2 fix — enforcement now real
 - Colony-wide distribution via system hooks (70-bashguard)
-- 75 rules across: evasion (27), persistence (9), network (8), credentials (3), destructive (3), git (3), supply_chain (2), proc (4), system (2), privesc (3), test_harness (2), ci (1), container (1), exec (1), mining (1), sql (1), tunnel (1), comms (1), self_protection (1), content (3)
-- GTFOBins gaps filled: tclsh/wish/expect pipe+heredoc, dd if=/key=value bypass
+- 76 rules across: evasion (28), persistence (9), network (8), credentials (3), destructive (3), git (3), supply_chain (2), proc (4), system (2), privesc (3), test_harness (2), ci (1), container (1), exec (1), mining (1), sql (1), tunnel (1), comms (1), self_protection (1), content (3)
+- GTFOBins gaps filled: tclsh/wish/expect pipe+heredoc, dd if=/key=value bypass, vim/vi/ex/nvim shell escape (evasion.vim_shell, 2026-07-09)
 - nc listen-mode false positive fixed
 - `bashguard run -c` — tilde-exec pattern: audit + sandbox execute
 - `bashguard launch` — session-level sandbox-exec with deny-default profile

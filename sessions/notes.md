@@ -1,4 +1,22 @@
 
+## 2026-07-09 14:43 UTC — Session 4
+
+**Worked on:** evasion.vim_shell — vim/vi/ex shell escape via ex commands
+
+**Completed:**
+- Story VIM-SHELL-ESCAPE written (stories/vim-shell-escape.md)
+- 16 tests: 10 BLOCK (vim -c ':!cmd', +shell, +!cmd, nvim, view, ex, rvim), 6 ALLOW
+- Rule evasion.vim_shell implemented (bashguard/rules/vim_shell.py), registered in __init__.py
+- PR #12 opened, merged, auto-deployed to production
+- 76 rules, 1336 tests, no regressions
+
+**Blocked:**
+- CONTRACT-ENFORCEMENT layer 2 (Haiku semantic): waiting on sysop + the_management for directory.json
+
+**Next action:** More GTFOBins gaps (pty.spawn? awk done, tclsh done, vim done — what's next?) or check todo
+
+**Key gotcha:** Parser probe before writing rules. `-c 'cmd'` → flags=['-c'], args=['\'cmd\''] (args[0] is the ex-cmd with quotes). +cmd → in args directly.
+
 ## 2026-07-09 07:01 UTC
 
 **Worked on:** CONTRACT-ENFORCEMENT-HOOK story revision (Sunir's design correction).

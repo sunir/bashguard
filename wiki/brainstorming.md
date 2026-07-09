@@ -28,3 +28,13 @@
 - path-ownership check generalizes beyond contract enforcement: any hook that validates "is this agent in its lane?" could use the same directory.json + colony path convention
 - layer 2 Haiku call could be replaced by a local embedding similarity check if latency becomes an issue — contracts are short, embeddings are fast, no API needed
 - session-questionnaire binary doesn't exist in this repo; would be worth adding to measure cross-session coherence for bashguard specifically
+
+---
+
+## Brainstorm — Session 4 (2026-07-09)
+
+- GTFOBins still has gaps: `python -c "import os; os.system('sh')"` is caught by evasion.eval but `python3 -c "import pty; pty.spawn('/bin/sh')"` may not be — worth checking pty.spawn detection
+- `vim` appears in forbidden_binary candidate list but should NOT be banned outright — only the shell-escape variant. evasion.vim_shell is the right split (detect patterns, not binaries)
+- parser probe pattern is now stable enough to document as a wiki page: "rule authoring checklist" with the probe-first step
+- `less` and `more` also have GTFOBins shell escape via `!cmd` in interactive mode — but they're non-interactive in automated context so may be low-value
+- The 1336-test count feels like a milestone worth surfacing in readme or metrics endpoint
