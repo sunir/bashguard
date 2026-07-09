@@ -1,65 +1,43 @@
 # bashguard — Focus
 
-## Current Status (after session 2, 2026-04-09)
+## Current Status (2026-07-09)
 
 **Hook enforcement: WORKING.** Exit code 2 on BLOCK. Colony dispatcher respects it.
 
 **Defense stack: COMPLETE.**
-- Layer 1: Rule audit (semantic detection) — 66 rules, 962 tests
+- Layer 1: Rule audit (semantic detection) — 75 rules, 1308 tests
 - Layer 2: Credential injection (placeholder substitution)
 - Layer 3: Seatbelt (sandbox-exec kernel enforcement)
-- Layer 4: FUSE shadow FS (CoW overlay, W3-W5 complete)
+- Layer 4: FUSE shadow FS (CoW overlay, W3-W5 complete — spike only)
 
 **82-incident database: SUBSTANTIALLY COVERED.**
-28/28 key threat patterns from the database all BLOCK correctly. Remaining gaps are at levels above bash parsing (DNS exfil, clipboard, session hijacking).
+All key threat patterns BLOCK correctly. Remaining gaps above bash parsing level (DNS exfil, clipboard, session hijacking).
 
-## What's Done
+## What's Done (cumulative)
 
 - W1-W5 complete (FUSE passthrough → shadow → ACL → token auth → session CLI)
-- Session CLI: fork, status, sync (BBS from Freestyle.sh)
-- Seatbelt integrated into hook pipeline
-- Credential injection integrated into hook pipeline
 - Hook exit code 2 fix — enforcement now real
-- Colony-wide distribution via system hooks
-- **962 tests, 66 rules** (as of 2026-04-09)
-- Spec 04 (51 evasion patterns): fully covered (evasion_gaps.py)
-- False positives fixed: /dev/null writes, trusted_paths for cross-repo access
+- Colony-wide distribution via system hooks (70-bashguard)
+- 75 rules across: evasion (27), persistence (9), network (8), credentials (3), destructive (3), git (3), supply_chain (2), proc (4), system (2), privesc (3), test_harness (2), ci (1), container (1), exec (1), mining (1), sql (1), tunnel (1), comms (1), self_protection (1), content (3)
+- GTFOBins gaps filled: tclsh/wish/expect pipe+heredoc, dd if=/key=value bypass
+- nc listen-mode false positive fixed
+- `bashguard run -c` — tilde-exec pattern: audit + sandbox execute
+- `bashguard launch` — session-level sandbox-exec with deny-default profile
+- Shared-repo worktree guard hook (PR #2 merged + deployed to system prod 2026-07-09)
 
-## New Rules This Session (Session 2 — +16)
+## P11 Roadmap — Next Milestone
 
-From `account_log_dump.py`:
-- `persistence.backdoor_account` (CRITICAL) — useradd/usermod/userdel/chpasswd
-- `evasion.log_tamper` (HIGH) — auditd stop/disable, journalctl vacuum, auditctl -e 0
-- `proc.gcore_dump` (CRITICAL) — live process memory dump
+**Strong candidate (from the_management): CONTRACT ENFORCEMENT**
 
-From `service_persist.py`:
-- `persistence.service_enable` (HIGH) — systemctl enable (boot persistence)
-- `persistence.at_job` (HIGH) — at/batch job scheduling
-- `persistence.ssh_key_deploy` (HIGH) — ssh-copy-id lateral movement
-- `persistence.cron_install` extended — `crontab <file>` now caught
+A PreToolUse hook that enforces `/contract` BOUNDARIES — warns/routes-to-the_management when an agent acts outside its OWNS domain. Coordinate with sysop (building the contract schema+directory in `feat/colony-contracts-directory`) + the twin at the_management@ocean (P11 context).
 
-From `network_recon_shell.py`:
-- `network.port_scan` (HIGH) — nmap/masscan/zmap
-- `network.socat_shell` (CRITICAL) — socat EXEC: bind/reverse shell
-- `destructive.disk_copy` (CRITICAL) — dd if=/dev/sda, /dev/mem, /proc/kcore
+## Backlog
 
-From `local_pkg_keylogger.py`:
-- `package.local_install` (CRITICAL) — dpkg/rpm/pip from local paths
-- `proc.xinput_keylogger` (HIGH) — xinput test keyboard capture
-- `proc.osascript_abuse` (HIGH) — osascript keystroke/clipboard
-
-From `kernel_route.py`:
-- `system.sysctl_write` (HIGH) — sysctl -w kernel parameter modification
-- `network.route_tamper` (HIGH) — ip route add/del on default/0.0.0.0/0
-
-## Potential Next Work
-
-- **`content.outside_boundary` false positive**: `getcap /usr/bin/ping` fires incorrectly. Root issue: the rule fires on any path outside worktree, including system tools doing read-only queries. The right fix is an exemption for known-safe read-only tools (getcap, lsof, file, etc.) or a `read_only_system_tools` allowlist.
-- **Risk scoring layer**: Some combinations of findings indicate higher risk than individual verdicts — e.g., `evasion.anti_forensics` + `network.unknown_host` together suggests an agent covering tracks. A compound rule or scoring layer above individual rules could surface this.
-- **Spec updates**: specs/00, 01 don't reflect current 66-rule set. Should update the rule inventory in the spec.
-- **`.deploy/` gitignore warning**: Minor — appears on each deploy. Clean up.
-- **Colony hooks distribution test**: Verify `colony c` distributes the 70-bashguard hook correctly.
-- **Remaining bash-catchable gaps**: DNS exfil via dig (command substitution in hostname), pbpaste/clipboard read (no safe pattern to distinguish from legitimate), `bash --noprofile --norc` (too many legit uses).
+- **`content.outside_boundary` false positive**: `getcap /usr/bin/ping` fires incorrectly. Exemption needed for known-safe read-only system tools.
+- **Risk scoring layer**: compound rule or scoring layer for dangerous combinations (e.g., `evasion.anti_forensics` + `network.unknown_host`).
+- **Remaining bash-catchable gaps**: DNS exfil via dig, pbpaste/clipboard read, `bash --noprofile --norc`.
+- **bwrap (Linux)**: `bashguard launch` on ocean node — sandbox-exec is macOS-only.
+- **Add /contract to identity.md** — bashguard has no formal contract in the colony directory yet.
 
 ## What Sunir Cares About
 
