@@ -3,158 +3,43 @@
 # bashguard project memory
 
 ## Project
-/Users/sunir/source/colony/bashguard — Python library + CLI for sandboxing LLM bash commands.
-(Note: old path `/Users/sunir/source/bashguard` is stale — it moved into colony monorepo)
+`/Users/sunir/source/colony/bashguard` — Python library + CLI sandboxing LLM bash commands (colony monorepo).
 
 ## Architecture
+- `parser.py` → `CommandNode`; `models.py` → Finding/ExecutionContext/Verdict (frozen); `rules/` → 75 rules via @register; `auditor.py` → `audit()`; `policy.py` → `decide()` (pure); `context.py` → `make_context()`; `cli.py` → data-grammar CLI; `grammar.bnf`, `types.py`
+- CLI modes: `hook` (PreToolUse), `analyze`, `run` (tilde-exec: audit+seatbelt), `log`, `stats`, `approve/revoke`, `launch` (session-level sandbox-exec), `claude setup`
+- Defense stack: rule audit → credential injection → seatbelt (sandbox-exec, deny-default) → FUSE shadow FS (spike only)
+- EXIT CODE 2 = block; 1 = confirm; 0 = allow. Colony dispatcher reads exit code, not JSON stdout.
 
-Single package: `bashguard/`
-- `parser.py` — tree-sitter parser → `CommandNode` (name, args, flags, redirect_targets)
-- `models.py` — frozen dataclasses: Finding, ExecutionContext, Verdict + Severity/VerdictType enums
-- `rules/` — Rule protocol + @register decorator + 74 built-in rules
-- `auditor.py` — `audit(script, ctx, rules=None)` → `list[Finding]`
-- `policy.py` — `decide(findings, ctx, config)` → `Verdict` (PURE FUNCTION)
-- `context.py` — `make_context()` builds ExecutionContext from env
-- `cli.py` — `bashguard` CLI (data-grammar). Hook + analyze + run + log + stats modes.
-- `grammar.bnf` — data-grammar BNF for CLI
-- `types.py` — data-grammar Python types (Entry, AnalyzeScript, RunScript, LogQuery, StatsQuery, Output)
+## Rules
+75 rules, 1308 tests (2026-07-09). Full inventory: [[rules-inventory]]
 
-## CLI modes (2026-07-09 current)
-- `bashguard hook` — Claude PreToolUse hook: reads JSON stdin, emits gates-compatible JSON or silent allow
-- `bashguard analyze -c 'cmd'` — full JSON audit report (debug)
-- `bashguard run -c 'cmd'` — **tilde-exec pattern**: audit + run in seatbelt sandbox, returns `{verdict, exit_code, stdout, stderr}`. Block exits 2, confirm exits 1, allow exits with command's exit code.
-- `bashguard log [--verdict V] [--rule R] [-n N] [--json]` — query JSONL audit log
-- `bashguard stats [--days N] [--json]` — aggregate audit statistics
-- `bashguard approve/revoke <rule_id>` — session approval cache
-- `bashguard claude setup` — install hook symlinks
-
-## Rules (75 registered, 1308 tests passing — 2026-07-09)
-
-### Core detection
-- `parse.error_node` — malformed/obfuscated commands (HIGH)
-- `credentials.privileged_path` — ~/.ssh, ~/.aws, /etc, .env (CRITICAL)
-- `credentials.cloud_secret` — aws secretsmanager, gcloud secrets, vault, kubectl get secret (CRITICAL)
-- `credentials.keychain` — macOS keychain access (CRITICAL)
-- `network.unknown_host` — curl/wget/nc to unknown hosts (CRITICAL)
-- `network.dev_tcp` — /dev/tcp bash trick (CRITICAL)
-- `network.port_scan` — nmap/masscan recon (HIGH)
-- `network.socat_shell` — socat shell relay (CRITICAL)
-- `network.route_tamper` — ip route / iptables changes (HIGH)
-- `network.firewall_tamper` — iptables/ufw/firewalld changes (HIGH)
-- `network.public_disclosure` — posting to public APIs (HIGH)
-- `destructive.irreversible` — rm -rf (non-/tmp), dd, mkfs, shred (HIGH/CRITICAL)
-- `destructive.disk_copy` — dd/cat/strings/hexdump on raw /dev/sda* (HIGH/CRITICAL)
-- `package_install.global` — brew/apt/npm -g (HIGH)
-- `package_install.publish` — npm publish/unpublish (CRITICAL)
-- `package.local_install` — pip install from local path (HIGH)
-- `git.destructive` — force push, reset --hard, branch -D (HIGH/CRITICAL)
-- `git.history_rewrite` — filter-branch, remote set-url (HIGH)
-- `git.hook_inject` — write/chmod to .git/hooks/ (CRITICAL)
-- `paths.protected_write` — write to /etc /usr /sys /proc /boot /bin /sbin /lib /dev /opt /usr/local/bin (HIGH)
-
-### Evasion (all CRITICAL unless noted)
-- `evasion.eval`, `evasion.shell_in_shell`, `evasion.interpreter_shell`
-- `evasion.source`, `evasion.exec_shell`, `evasion.alias`, `evasion.coproc`
-- `evasion.pipe_to_shell`, `evasion.process_sub_exec`
-- `evasion.dangerous_env` — LD_PRELOAD, PYTHONSTARTUP, PYTHONPATH, NODE_OPTIONS, RUBYLIB, etc.
-- `evasion.decode_pipeline`, `evasion.dynamic_command_name`, `evasion.ifs_manipulation`
-- `evasion.ldconfig_inject` — ldconfig /tmp path injects linker cache
-- `evasion.log_tamper` — clearing /var/log, history
-- `evasion.ansi_c_escape`, `evasion.heredoc_interpreter`, `evasion.shellshock`
-- `evasion.function_shadow`, `evasion.glob_command_name`, `evasion.xargs_shell`
-- `evasion.path_traversal`, `evasion.proc_root_bypass`, `evasion.anti_forensics`
-- `evasion.agent_spawn` — spawning sub-agents
-
-### Persistence
-- `persistence.backdoor_account`, `persistence.service_enable`, `persistence.at_job`
-- `persistence.ssh_key_deploy`, `persistence.boot_entry` — LaunchAgents, systemd units, autostart
-- `persistence.local_bin_shadow` — write to ~/.local/bin/, ~/bin/
-- `persistence.shell_rc_inject` — write to ~/.bashrc, ~/.zshrc, ~/.profile, etc.
-- `persistence.cron_install`
-
-### Supply chain / test tampering
-- `test_harness.conftest_inject` — pytest hookimpl forces tests to "passed"
-- `test_harness.site_packages_inject` — monkey-patches installed libs
-- `ci.workflow_inject` — write to .github/workflows/, Jenkinsfile, etc.
-- `supply_chain.pkg_mirror_redirect` — pip/npm/yarn/gem registry redirect
-- `supply_chain.pkg_config_inject` — write to ~/.npmrc, ~/.pip/pip.conf
-
-### Process / system
-- `proc.gcore_dump`, `proc.process_inject`, `proc.credential_scrape`
-- `proc.xinput_keylogger`, `proc.osascript_abuse`
-- `system.kernel_module`, `system.sysctl_write`
-- `privesc.suid_chmod`, `privesc.setcap`, `privesc.sudo_shell`
-- `container.escape` — --privileged, --pid=host, --net=host
-
-### Other
-- `exec.forbidden_binary` (HIGH, added 2026-05-06) — binaries with no legitimate LLM coding use:
-  - Offensive tools: msfconsole, sqlmap, hashcat, aircrack-ng, hydra, responder, volatility
-  - GUI apps: zathura, gimp, wireshark, xdotool
-  - Legacy/exotic: debugfs, crash, jrunscript, jjs, rtorrent
-- `sql.destructive` — DROP DATABASE/TABLE, TRUNCATE, bulk DELETE
-- `tunnel.service` — ngrok, localtunnel, serveo
-- `mining.detected` — xmrig, minerd, cpuminer + 6 more
-- `comms` — sendmail, mutt, Slack/Discord/Teams webhooks
-- `self_protection` — modification of bashguard config/rule/core files blocked
-- Content inspection: `content.secret_in_args`, `content.exfiltration_pattern`, `content.outside_boundary`
-
-## ActionType enum (15 types)
-FILESYSTEM_READ, FILESYSTEM_WRITE, FILESYSTEM_DELETE, FILESYSTEM_MOVE,
-NETWORK_OUTBOUND, GIT_SAFE, GIT_DESTRUCTIVE, PACKAGE_INSTALL, LANG_EXEC,
-PROCESS_SIGNAL, ENV_MUTATION, OBFUSCATED, CREDENTIAL_ACCESS, SYSTEM_CONFIG, UNKNOWN
-
-## Shared-repo worktree guard (2026-07-09)
-- `09-shared-repo-worktree-guard` hook — blocks branch-mutating git in main working dir of shared repos (system, heuristics)
-- Worktrees (.git FILE) and non-shared repos always allowed
-- Shipped to system main (PR #2 merged 2026-07-09), auto-distributed to all agents via 05-system-sync at next Stop
-- Source: `/var/db/ai/claude/prod/bashguard/hooks/09-shared-repo-worktree-guard`
-- Symlink at `~/.claude/hooks/PreToolUse.d/system/09-shared-repo-worktree-guard`
-
-## Colony deploy chain (verified 2026-07-09)
-Merge to main → post-merge hook fires → `production` branch advances → `/var/db/ai/claude/prod/<repo>` resets → `05-system-sync` Stop hook distributes `PreToolUse.d/system/0X-*` to all member repos at next session end. Zero-touch for colony-wide rollout.
-
-## P11 roadmap — next milestone (2026-07-09)
-**CONTRACT ENFORCEMENT**: PreToolUse hook enforcing /contract BOUNDARIES. Blocked on:
-1. the_management's decision: canonical compiled directory path (suggested: `the_management/contracts/directory.json`) + refresh mechanism (cupdate/colony-setup)
-2. the_management@ocean (twin) P11 milestone definition
-Sysop confirmed `colony-contracts` schema is stable. Do NOT start story until both answers arrive.
-
-## Defense-in-depth stack (on ALLOW verdict)
-1. **Rule audit** — semantic detection (75 rules)
-2. **Credential injection** — `bashguard/credentials.py`. Substitutes `{{KEY}}` placeholders. Real secrets never in Claude's context.
-3. **Seatbelt** — `bashguard/seatbelt.py`. `sandbox-exec -f profile.sb /bin/bash -c cmd`. Deny-default SBPL. Disable with `BASHGUARD_SEATBELT=0`.
-4. **FUSE shadow FS** — CoW overlay via FUSE-T (spike — not production, lives in `spike/`). Writes captured in memory, real dir untouched.
-
-## Key design decisions
-- Detection orthogonal to response: rules → Findings, policy → Verdict
-- All models frozen=True (immutable)
-- Rule.check() must never raise — return [] on exception
-- allowed_hosts: exact match only, no wildcards
-- venv at `.venv/`, run tests with `.venv/bin/python -m pytest` (NOT `.venv/bin/pytest` — shebang broken)
-- `python -m bashguard.cli` broken (data_grammar pth path stale). Use `bashguard` binary or `shutil.which("bashguard")` in tests.
-- tree-sitter-bash wraps command name in `command_name` node — use `_unwrap_cmd_name()` helper
-- coproc parsed as plain command — detect via cmd.name == "coproc"
-- `rules/` dir is in .gitignore — use `git add -f` when committing rule changes
-- Cannot commit directly to main — must branch + merge (pre-commit hook enforces)
-
-## data-grammar lesson
-Tokenless method chains NEVER fire. Do full pipeline work inside each token-consuming method.
-Exception: `__str__` methods work because `@end` fires and calls str(current_object).
-New CLI types must be registered in `_TYPES` dict in `cli.py` or the grammar can't instantiate them.
-New data-grammar validates `--flag` literals must be in `Flags < stdlib.Flags` subtypes. Use
-`# compile:allow flag-outside-flags` pragma in grammar.bnf when flags are intentional data
-selectors (e.g. --command, --days, --verdict are query params, not meta-flags). The method
-return type must also have a grammar rule — anonymous local classes won't work as return types.
+## Key gotchas
+- `rules/` in .gitignore — use `git add -f` to commit rule changes
+- Cannot commit to main directly — branch + PR enforced by pre-commit hook
+- Run tests with `.venv/bin/python -m pytest` (NOT `.venv/bin/pytest` — shebang broken)
+- `python -m bashguard.cli` broken (stale pth). Use `bashguard` binary or `shutil.which("bashguard")` in tests
+- tree-sitter-bash wraps cmd name in `command_name` node — use `_unwrap_cmd_name()` helper
+- coproc parsed as plain command — detect via `cmd.name == "coproc"`
+- `_extract_path(arg)` strips `key=value` prefix for dd-style args (credentials.privileged_path)
+- nc listen mode: `_is_nc_listen()` returns True when `-l` in flags; `_extract_nc_host()` returns None in listen mode
+- data-grammar lessons: [[data-grammar]]
 
 ## Colony integration
-- `~/.claude/hooks/PreToolUse.d/system/70-bashguard` → global symlink to prod hook
-- Deployed via auto-deploy on merge to main (production worktree)
-- EXIT CODE 2 = block (colony dispatcher reads exit code, not JSON stdout)
+- `~/.claude/hooks/PreToolUse.d/system/70-bashguard` → symlink to prod hook
+- `~/.claude/hooks/PreToolUse.d/system/09-shared-repo-worktree-guard` → symlink to prod hook (shipped 2026-07-09)
+- Deploy chain: merge to main → post-merge hook → `production` branch advances → prod worktree resets → `05-system-sync` distributes `PreToolUse.d/system/0X-*` to all members at next Stop
+- `/var/db/ai/claude/prod/bashguard` — production worktree
 
-## Tilde-inspired run mode (added 2026-05-06)
-`bashguard run -c 'cmd'` — audit + execute in seatbelt, structured JSON output.
-Stolen from tilde.run (tilde-exec pattern). Lets callers use bashguard as executor
-not just interceptor. Exit code propagates from executed command.
+## Active work — CONTRACT-ENFORCEMENT-HOOK
+Story written (`stories/contract-enforcement-hook.md`). Two-layer design (Sunir's correction):
+1. **Layer 1 (hot path)**: path-ownership check — agent touching another repo's root? Computable from `the_management/contracts/directory.json` + `<colony_root>/<repo>/` convention. Advisory warn + alert.
+2. **Layer 2 (Haiku, out-of-band)**: semantic judgment — is task within OWNS? Fire-and-forget, never blocks. Proposal, not verdict.
+- Canonical path: `the_management/contracts/directory.json` — schema `{generated_at, contracts:[{repo,role,owns,boundaries,collaborates}]}`
+- Fail-open: missing/stale/unparseable → warn + alert, always allow
+- **WRONG (corrected):** keyword-matching BOUNDARIES items — /contract is semantic, not statically computable
+- **Blocked on:** sysop adding `generated_at` to compiler; the_management committing first `directory.json`
+- Files to build: `hooks/11-contract-enforcement`, `hooks/lib/contract_path_check.py`, `hooks/lib/contract_semantic_check.py`
 
 
 # MEMORY.md
@@ -162,158 +47,66 @@ not just interceptor. Exit code propagates from executed command.
 # bashguard project memory
 
 ## Project
-/Users/sunir/source/colony/bashguard — Python library + CLI for sandboxing LLM bash commands.
-(Note: old path `/Users/sunir/source/bashguard` is stale — it moved into colony monorepo)
+`/Users/sunir/source/colony/bashguard` — Python library + CLI sandboxing LLM bash commands (colony monorepo).
 
 ## Architecture
+- `parser.py` → `CommandNode`; `models.py` → Finding/ExecutionContext/Verdict (frozen); `rules/` → 75 rules via @register; `auditor.py` → `audit()`; `policy.py` → `decide()` (pure); `context.py` → `make_context()`; `cli.py` → data-grammar CLI; `grammar.bnf`, `types.py`
+- CLI modes: `hook` (PreToolUse), `analyze`, `run` (tilde-exec: audit+seatbelt), `log`, `stats`, `approve/revoke`, `launch` (session-level sandbox-exec), `claude setup`
+- Defense stack: rule audit → credential injection → seatbelt (sandbox-exec, deny-default) → FUSE shadow FS (spike only)
+- EXIT CODE 2 = block; 1 = confirm; 0 = allow. Colony dispatcher reads exit code, not JSON stdout.
 
-Single package: `bashguard/`
-- `parser.py` — tree-sitter parser → `CommandNode` (name, args, flags, redirect_targets)
-- `models.py` — frozen dataclasses: Finding, ExecutionContext, Verdict + Severity/VerdictType enums
-- `rules/` — Rule protocol + @register decorator + 74 built-in rules
-- `auditor.py` — `audit(script, ctx, rules=None)` → `list[Finding]`
-- `policy.py` — `decide(findings, ctx, config)` → `Verdict` (PURE FUNCTION)
-- `context.py` — `make_context()` builds ExecutionContext from env
-- `cli.py` — `bashguard` CLI (data-grammar). Hook + analyze + run + log + stats modes.
-- `grammar.bnf` — data-grammar BNF for CLI
-- `types.py` — data-grammar Python types (Entry, AnalyzeScript, RunScript, LogQuery, StatsQuery, Output)
+## Rules
+75 rules, 1308 tests (2026-07-09). Full inventory: [[rules-inventory]]
 
-## CLI modes (2026-07-09 current)
-- `bashguard hook` — Claude PreToolUse hook: reads JSON stdin, emits gates-compatible JSON or silent allow
-- `bashguard analyze -c 'cmd'` — full JSON audit report (debug)
-- `bashguard run -c 'cmd'` — **tilde-exec pattern**: audit + run in seatbelt sandbox, returns `{verdict, exit_code, stdout, stderr}`. Block exits 2, confirm exits 1, allow exits with command's exit code.
-- `bashguard log [--verdict V] [--rule R] [-n N] [--json]` — query JSONL audit log
-- `bashguard stats [--days N] [--json]` — aggregate audit statistics
-- `bashguard approve/revoke <rule_id>` — session approval cache
-- `bashguard claude setup` — install hook symlinks
-
-## Rules (75 registered, 1308 tests passing — 2026-07-09)
-
-### Core detection
-- `parse.error_node` — malformed/obfuscated commands (HIGH)
-- `credentials.privileged_path` — ~/.ssh, ~/.aws, /etc, .env (CRITICAL)
-- `credentials.cloud_secret` — aws secretsmanager, gcloud secrets, vault, kubectl get secret (CRITICAL)
-- `credentials.keychain` — macOS keychain access (CRITICAL)
-- `network.unknown_host` — curl/wget/nc to unknown hosts (CRITICAL)
-- `network.dev_tcp` — /dev/tcp bash trick (CRITICAL)
-- `network.port_scan` — nmap/masscan recon (HIGH)
-- `network.socat_shell` — socat shell relay (CRITICAL)
-- `network.route_tamper` — ip route / iptables changes (HIGH)
-- `network.firewall_tamper` — iptables/ufw/firewalld changes (HIGH)
-- `network.public_disclosure` — posting to public APIs (HIGH)
-- `destructive.irreversible` — rm -rf (non-/tmp), dd, mkfs, shred (HIGH/CRITICAL)
-- `destructive.disk_copy` — dd/cat/strings/hexdump on raw /dev/sda* (HIGH/CRITICAL)
-- `package_install.global` — brew/apt/npm -g (HIGH)
-- `package_install.publish` — npm publish/unpublish (CRITICAL)
-- `package.local_install` — pip install from local path (HIGH)
-- `git.destructive` — force push, reset --hard, branch -D (HIGH/CRITICAL)
-- `git.history_rewrite` — filter-branch, remote set-url (HIGH)
-- `git.hook_inject` — write/chmod to .git/hooks/ (CRITICAL)
-- `paths.protected_write` — write to /etc /usr /sys /proc /boot /bin /sbin /lib /dev /opt /usr/local/bin (HIGH)
-
-### Evasion (all CRITICAL unless noted)
-- `evasion.eval`, `evasion.shell_in_shell`, `evasion.interpreter_shell`
-- `evasion.source`, `evasion.exec_shell`, `evasion.alias`, `evasion.coproc`
-- `evasion.pipe_to_shell`, `evasion.process_sub_exec`
-- `evasion.dangerous_env` — LD_PRELOAD, PYTHONSTARTUP, PYTHONPATH, NODE_OPTIONS, RUBYLIB, etc.
-- `evasion.decode_pipeline`, `evasion.dynamic_command_name`, `evasion.ifs_manipulation`
-- `evasion.ldconfig_inject` — ldconfig /tmp path injects linker cache
-- `evasion.log_tamper` — clearing /var/log, history
-- `evasion.ansi_c_escape`, `evasion.heredoc_interpreter`, `evasion.shellshock`
-- `evasion.function_shadow`, `evasion.glob_command_name`, `evasion.xargs_shell`
-- `evasion.path_traversal`, `evasion.proc_root_bypass`, `evasion.anti_forensics`
-- `evasion.agent_spawn` — spawning sub-agents
-
-### Persistence
-- `persistence.backdoor_account`, `persistence.service_enable`, `persistence.at_job`
-- `persistence.ssh_key_deploy`, `persistence.boot_entry` — LaunchAgents, systemd units, autostart
-- `persistence.local_bin_shadow` — write to ~/.local/bin/, ~/bin/
-- `persistence.shell_rc_inject` — write to ~/.bashrc, ~/.zshrc, ~/.profile, etc.
-- `persistence.cron_install`
-
-### Supply chain / test tampering
-- `test_harness.conftest_inject` — pytest hookimpl forces tests to "passed"
-- `test_harness.site_packages_inject` — monkey-patches installed libs
-- `ci.workflow_inject` — write to .github/workflows/, Jenkinsfile, etc.
-- `supply_chain.pkg_mirror_redirect` — pip/npm/yarn/gem registry redirect
-- `supply_chain.pkg_config_inject` — write to ~/.npmrc, ~/.pip/pip.conf
-
-### Process / system
-- `proc.gcore_dump`, `proc.process_inject`, `proc.credential_scrape`
-- `proc.xinput_keylogger`, `proc.osascript_abuse`
-- `system.kernel_module`, `system.sysctl_write`
-- `privesc.suid_chmod`, `privesc.setcap`, `privesc.sudo_shell`
-- `container.escape` — --privileged, --pid=host, --net=host
-
-### Other
-- `exec.forbidden_binary` (HIGH, added 2026-05-06) — binaries with no legitimate LLM coding use:
-  - Offensive tools: msfconsole, sqlmap, hashcat, aircrack-ng, hydra, responder, volatility
-  - GUI apps: zathura, gimp, wireshark, xdotool
-  - Legacy/exotic: debugfs, crash, jrunscript, jjs, rtorrent
-- `sql.destructive` — DROP DATABASE/TABLE, TRUNCATE, bulk DELETE
-- `tunnel.service` — ngrok, localtunnel, serveo
-- `mining.detected` — xmrig, minerd, cpuminer + 6 more
-- `comms` — sendmail, mutt, Slack/Discord/Teams webhooks
-- `self_protection` — modification of bashguard config/rule/core files blocked
-- Content inspection: `content.secret_in_args`, `content.exfiltration_pattern`, `content.outside_boundary`
-
-## ActionType enum (15 types)
-FILESYSTEM_READ, FILESYSTEM_WRITE, FILESYSTEM_DELETE, FILESYSTEM_MOVE,
-NETWORK_OUTBOUND, GIT_SAFE, GIT_DESTRUCTIVE, PACKAGE_INSTALL, LANG_EXEC,
-PROCESS_SIGNAL, ENV_MUTATION, OBFUSCATED, CREDENTIAL_ACCESS, SYSTEM_CONFIG, UNKNOWN
-
-## Shared-repo worktree guard (2026-07-09)
-- `09-shared-repo-worktree-guard` hook — blocks branch-mutating git in main working dir of shared repos (system, heuristics)
-- Worktrees (.git FILE) and non-shared repos always allowed
-- Shipped to system main (PR #2 merged 2026-07-09), auto-distributed to all agents via 05-system-sync at next Stop
-- Source: `/var/db/ai/claude/prod/bashguard/hooks/09-shared-repo-worktree-guard`
-- Symlink at `~/.claude/hooks/PreToolUse.d/system/09-shared-repo-worktree-guard`
-
-## Colony deploy chain (verified 2026-07-09)
-Merge to main → post-merge hook fires → `production` branch advances → `/var/db/ai/claude/prod/<repo>` resets → `05-system-sync` Stop hook distributes `PreToolUse.d/system/0X-*` to all member repos at next session end. Zero-touch for colony-wide rollout.
-
-## P11 roadmap — next milestone (2026-07-09)
-**CONTRACT ENFORCEMENT**: PreToolUse hook enforcing /contract BOUNDARIES. Blocked on:
-1. the_management's decision: canonical compiled directory path (suggested: `the_management/contracts/directory.json`) + refresh mechanism (cupdate/colony-setup)
-2. the_management@ocean (twin) P11 milestone definition
-Sysop confirmed `colony-contracts` schema is stable. Do NOT start story until both answers arrive.
-
-## Defense-in-depth stack (on ALLOW verdict)
-1. **Rule audit** — semantic detection (75 rules)
-2. **Credential injection** — `bashguard/credentials.py`. Substitutes `{{KEY}}` placeholders. Real secrets never in Claude's context.
-3. **Seatbelt** — `bashguard/seatbelt.py`. `sandbox-exec -f profile.sb /bin/bash -c cmd`. Deny-default SBPL. Disable with `BASHGUARD_SEATBELT=0`.
-4. **FUSE shadow FS** — CoW overlay via FUSE-T (spike — not production, lives in `spike/`). Writes captured in memory, real dir untouched.
-
-## Key design decisions
-- Detection orthogonal to response: rules → Findings, policy → Verdict
-- All models frozen=True (immutable)
-- Rule.check() must never raise — return [] on exception
-- allowed_hosts: exact match only, no wildcards
-- venv at `.venv/`, run tests with `.venv/bin/python -m pytest` (NOT `.venv/bin/pytest` — shebang broken)
-- `python -m bashguard.cli` broken (data_grammar pth path stale). Use `bashguard` binary or `shutil.which("bashguard")` in tests.
-- tree-sitter-bash wraps command name in `command_name` node — use `_unwrap_cmd_name()` helper
-- coproc parsed as plain command — detect via cmd.name == "coproc"
-- `rules/` dir is in .gitignore — use `git add -f` when committing rule changes
-- Cannot commit directly to main — must branch + merge (pre-commit hook enforces)
-
-## data-grammar lesson
-Tokenless method chains NEVER fire. Do full pipeline work inside each token-consuming method.
-Exception: `__str__` methods work because `@end` fires and calls str(current_object).
-New CLI types must be registered in `_TYPES` dict in `cli.py` or the grammar can't instantiate them.
-New data-grammar validates `--flag` literals must be in `Flags < stdlib.Flags` subtypes. Use
-`# compile:allow flag-outside-flags` pragma in grammar.bnf when flags are intentional data
-selectors (e.g. --command, --days, --verdict are query params, not meta-flags). The method
-return type must also have a grammar rule — anonymous local classes won't work as return types.
+## Key gotchas
+- `rules/` in .gitignore — use `git add -f` to commit rule changes
+- Cannot commit to main directly — branch + PR enforced by pre-commit hook
+- Run tests with `.venv/bin/python -m pytest` (NOT `.venv/bin/pytest` — shebang broken)
+- `python -m bashguard.cli` broken (stale pth). Use `bashguard` binary or `shutil.which("bashguard")` in tests
+- tree-sitter-bash wraps cmd name in `command_name` node — use `_unwrap_cmd_name()` helper
+- coproc parsed as plain command — detect via `cmd.name == "coproc"`
+- `_extract_path(arg)` strips `key=value` prefix for dd-style args (credentials.privileged_path)
+- nc listen mode: `_is_nc_listen()` returns True when `-l` in flags; `_extract_nc_host()` returns None in listen mode
+- data-grammar lessons: [[data-grammar]]
 
 ## Colony integration
-- `~/.claude/hooks/PreToolUse.d/system/70-bashguard` → global symlink to prod hook
-- Deployed via auto-deploy on merge to main (production worktree)
-- EXIT CODE 2 = block (colony dispatcher reads exit code, not JSON stdout)
+- `~/.claude/hooks/PreToolUse.d/system/70-bashguard` → symlink to prod hook
+- `~/.claude/hooks/PreToolUse.d/system/09-shared-repo-worktree-guard` → symlink to prod hook (shipped 2026-07-09)
+- Deploy chain: merge to main → post-merge hook → `production` branch advances → prod worktree resets → `05-system-sync` distributes `PreToolUse.d/system/0X-*` to all members at next Stop
+- `/var/db/ai/claude/prod/bashguard` — production worktree
 
-## Tilde-inspired run mode (added 2026-05-06)
-`bashguard run -c 'cmd'` — audit + execute in seatbelt, structured JSON output.
-Stolen from tilde.run (tilde-exec pattern). Lets callers use bashguard as executor
-not just interceptor. Exit code propagates from executed command.
+## Active work — CONTRACT-ENFORCEMENT-HOOK
+Story written (`stories/contract-enforcement-hook.md`). Two-layer design (Sunir's correction):
+1. **Layer 1 (hot path)**: path-ownership check — agent touching another repo's root? Computable from `the_management/contracts/directory.json` + `<colony_root>/<repo>/` convention. Advisory warn + alert.
+2. **Layer 2 (Haiku, out-of-band)**: semantic judgment — is task within OWNS? Fire-and-forget, never blocks. Proposal, not verdict.
+- Canonical path: `the_management/contracts/directory.json` — schema `{generated_at, contracts:[{repo,role,owns,boundaries,collaborates}]}`
+- Fail-open: missing/stale/unparseable → warn + alert, always allow
+- **WRONG (corrected):** keyword-matching BOUNDARIES items — /contract is semantic, not statically computable
+- **Blocked on:** sysop adding `generated_at` to compiler; the_management committing first `directory.json`
+- Files to build: `hooks/11-contract-enforcement`, `hooks/lib/contract_path_check.py`, `hooks/lib/contract_semantic_check.py`
+
+
+# data-grammar.md
+
+---
+name: data-grammar
+description: "Gotchas and lessons from bashguard's data-grammar BNF CLI framework"
+metadata: 
+  node_type: memory
+  type: feedback
+  originSessionId: 6b49b1d3-3c6e-46dc-99ef-8e1a08b09364
+---
+
+Tokenless method chains NEVER fire — do full pipeline work inside each token-consuming method. Exception: `__str__` works because `@end` fires.
+
+New CLI types must be registered in `_TYPES` dict in `cli.py` or the grammar can't instantiate them.
+
+`--flag` literals must be in `Flags < stdlib.Flags` subtypes. Use `# compile:allow flag-outside-flags` pragma for intentional data selectors (--command, --days, --verdict are query params, not meta-flags).
+
+Return type must have a grammar rule — anonymous local classes won't work.
+
+**Why:** data-grammar is strict about token consumption and type registration; silent failures are the result of violating these invariants.
+**How to apply:** always check _TYPES registration and grammar rule existence when adding new CLI modes.
 
 
 # feedback_msg_proactive.md
@@ -384,5 +177,31 @@ Features NOT borrowed (not needed or different approach):
 - State machine contracts — may be useful later for deploy sequences
 - MCP server mode — bashguard uses Claude hooks, not MCP
 - Domain-specific rule packs (financial, medical, military) — future potential
+
+
+# rules-inventory.md
+
+---
+name: rules-inventory
+description: Full list of all 75 bashguard rules by category and rule_id
+metadata: 
+  node_type: memory
+  type: reference
+  originSessionId: 6b49b1d3-3c6e-46dc-99ef-8e1a08b09364
+---
+
+75 rules, 1308 tests (2026-07-09). Categories and rule_ids:
+
+**Core detection:** parse.error_node, credentials.privileged_path, credentials.cloud_secret, credentials.keychain, network.unknown_host, network.dev_tcp, network.port_scan, network.socat_shell, network.route_tamper, network.firewall_tamper, network.public_disclosure, destructive.irreversible, destructive.disk_copy, package_install.global, package_install.publish, package.local_install, git.destructive, git.history_rewrite, git.hook_inject, paths.protected_write
+
+**Evasion (27):** evasion.eval, shell_in_shell, interpreter_shell, source, exec_shell, alias, coproc, pipe_to_shell, process_sub_exec, dangerous_env, decode_pipeline, dynamic_command_name, ifs_manipulation, ldconfig_inject, log_tamper, ansi_c_escape, heredoc_interpreter, shellshock, function_shadow, glob_command_name, xargs_shell, path_traversal, proc_root_bypass, anti_forensics, agent_spawn, shell_via_tool (+tclsh/wish/expect in _SHELLS + _SCRIPT_INTERPS)
+
+**Persistence (9):** persistence.backdoor_account, service_enable, at_job, ssh_key_deploy, boot_entry, local_bin_shadow, shell_rc_inject, cron_install + dd key=value path fix in credentials.privileged_path (_extract_path helper)
+
+**Supply chain / test tampering:** test_harness.conftest_inject, site_packages_inject, ci.workflow_inject, supply_chain.pkg_mirror_redirect, pkg_config_inject
+
+**Process / system:** proc.gcore_dump, process_inject, credential_scrape, xinput_keylogger, osascript_abuse, system.kernel_module, sysctl_write, privesc.suid_chmod, setcap, sudo_shell, container.escape
+
+**Other:** exec.forbidden_binary (msfconsole/sqlmap/hashcat/aircrack-ng/hydra/responder/volatility + GUI + legacy), sql.destructive, tunnel.service, mining.detected, comms, self_protection, content.secret_in_args, exfiltration_pattern, outside_boundary
 
 
