@@ -58,9 +58,10 @@ def build_profile(
         "(deny default)",
         # Reads anywhere — agent needs /usr/bin, /System, /opt/homebrew, etc.
         '(allow file-read* (subpath "/"))',
-        # Writes: project dir only + /private/tmp
+        # Writes: project dir only + /private/tmp + /dev/null (shell 2>/dev/null)
         f'(allow file-write* (subpath "{real}"))',
         '(allow file-write* (subpath "/private/tmp"))',
+        '(allow file-write* (literal "/dev/null"))',
     ]
 
     if extra_write_paths:
