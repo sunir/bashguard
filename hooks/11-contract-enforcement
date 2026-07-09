@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# 11-contract-enforcement — Layer 1: path-ownership enforcement
+#
+# Story: CONTRACT-ENFORCEMENT-HOOK
+#
+# Advisory only — always exits 0 (fail-open).
+
+set -uo pipefail
+
+INPUT=$(cat)
+
+TOOL_NAME=$(printf '%s' "$INPUT" | python3 -c \
+  "import json,sys; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || true)
+
+case "${TOOL_NAME:-}" in
+  Bash|Write|Edit|MultiEdit|Read) ;;
+  *) exit 0 ;;
+esac
+
+TOOL_INPUT_JSON=$(printf '%s' "$INPUT" | python3 -c \
+  "import json,sys; print(json.dumps(json.load(sys.stdin).get('tool_input',{})))" 2>/dev/null || echo '{}')
+CWD=$(printf '%s' "$INPUT" | python3 -c \
+  "import json,sys; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null || echo "$PWD")
+CWD="${CWD:-$PWD}"
+
+CURRENT_REPO=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null | xargs basename 2>/dev/null || true)
+[ -z "${CURRENT_REPO:-}" ] && exit 0
+
+COLONY_ROOT="${COLONY_ROOT:-$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null | xargs dirname 2>/dev/null || echo "")}"
+[ -z "${COLONY_ROOT:-}" ] && exit 0
+
+DIRECTORY_JSON="$COLONY_ROOT/the_management/contracts/directory.json"
+
+HOOK_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+
+RESULT=$(TOOL_NAME="$TOOL_NAME" \
+         TOOL_INPUT_JSON="$TOOL_INPUT_JSON" \
+         CWD="$CWD" \
+         CURRENT_REPO="$CURRENT_REPO" \
+         COLONY_ROOT="$COLONY_ROOT" \
+         DIRECTORY_JSON="$DIRECTORY_JSON" \
+         HOOK_LIB="$HOOK_LIB" \
+         python3 - <<'PYEOF'
+import json, os, sys
+from pathlib import Path
+
+try:
+    # hooks/lib/ passed via env — __file__ is <stdin> in heredoc context
+    _lib = os.environ.get("HOOK_LIB", "")
+    if _lib and _lib not in sys.path:
+        sys.path.insert(0, _lib)
+    from contract_path_check import load_directory, check_path_ownership
+except ImportError:
+    sys.exit(0)
+
+tool_name     = os.environ["TOOL_NAME"]
+tool_input    = json.loads(os.environ["TOOL_INPUT_JSON"])
+cwd           = os.environ["CWD"]
+current_repo  = os.environ["CURRENT_REPO"]
+colony_root   = Path(os.environ["COLONY_ROOT"])
+directory_json = Path(os.environ["DIRECTORY_JSON"])
+
+directory = load_directory(directory_json)
+
+paths_to_check = []
+if tool_name == "Bash":
+    paths_to_check.append(Path(cwd))
+else:
+    fp = tool_input.get("file_path") or tool_input.get("path")
+    if fp:
+        paths_to_check.append(Path(fp))
+    for edit in tool_input.get("edits", []):
+        fp2 = edit.get("file_path")
+        if fp2:
+            paths_to_check.append(Path(fp2))
+
+if directory and directory.is_stale():
+    print("STALE")
+
+for p in paths_to_check:
+    result = check_path_ownership(p, current_repo, directory, colony_root)
+    if result.violation:
+        print(f"VIOLATION\t{result.foreign_repo}\t{result.message}")
+        break
+PYEOF
+) || true
+
+case "${RESULT:-}" in
+  STALE*)
+    echo "[contract-enforcement] directory.json is stale — path check may be outdated" >&2
+    msg alert the_management "contract-enforcement: directory.json stale, regen needed" 2>/dev/null || true
+    ;;
+  VIOLATION*)
+    FOREIGN=$(printf '%s' "$RESULT" | cut -f2)
+    MSG=$(printf '%s' "$RESULT" | cut -f3-)
+    echo "[contract-enforcement] $MSG" >&2
+    msg alert the_management "Contract path-ownership: $CURRENT_REPO touching $FOREIGN (advisory)" 2>/dev/null || true
+    ;;
+esac
+
+exit 0
