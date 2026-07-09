@@ -36,7 +36,14 @@ def _extract_url_host(text: str) -> str | None:
     return None
 
 
+def _is_nc_listen(cmd: CommandNode) -> bool:
+    # Story: NC-LISTEN-FALSE — detect -l / -lv / -lvp / -l -p etc.
+    return any("l" in flag.lstrip("-") for flag in cmd.flags)
+
+
 def _extract_nc_host(cmd: CommandNode) -> str | None:
+    if _is_nc_listen(cmd):
+        return None  # listen mode: first positional is port, not host
     positional = [a for a in cmd.args if not a.startswith("-")]
     return positional[0] if positional else None
 
