@@ -83,6 +83,14 @@ Entry = "hook" @required :hook_mode > Output
           "description": "Claude Code integration commands",
           "examples": ["bashguard claude setup"]
         })
+      | "launch" @required :new_launch > Launch
+        @help({
+          "description": "Exec a command wrapped in a deny-default sandbox-exec session profile",
+          "examples": [
+            "bashguard launch -c 'claude'",
+            "bashguard launch --project /my/project -c 'claude-code'"
+          ]
+        })
       ;
 
 ClaudeSetup = "setup" :do_setup > Output
@@ -104,5 +112,9 @@ AnalyzeScript = ("--command" | "-c") &cmd<TEXT> :analyze_command > Output
 
 RunScript = ("--command" | "-c") &cmd<TEXT> :execute_command > Output
           ;
+
+Launch = ("--project" | "-p") &path<TEXT> :set_project > Launch
+       | ("--command" | "-c") &cmd<TEXT> :execute_launch > Output
+       ;
 
 Output = @end ;

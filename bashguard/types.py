@@ -182,6 +182,11 @@ class Entry(Document):
         """Create a RunScript for sandboxed execution mode."""
         return RunScript()
 
+    def new_launch(self) -> "LaunchWrapper":
+        """Create a LaunchWrapper for session-level sandbox launch."""
+        # Story: SANDBOX-EXEC-LAUNCH
+        return LaunchWrapper()
+
     def __str__(self) -> str:
         return ""
 
@@ -364,6 +369,33 @@ class LogQuery(Document):
             rules = ", ".join(f["rule_id"] for f in e.get("findings", []))
             lines.append(f"{ts}  {verdict:8}  {cmd:<60}  {rules}")
         return "\n".join(lines)
+
+
+class LaunchWrapper(Document):
+    """Session-level sandbox launcher.
+
+    Story: SANDBOX-EXEC-LAUNCH
+
+    bashguard launch -c CMD [--project DIR]
+    → exec sandbox-exec -f profile.sb /bin/sh -c CMD
+
+    Wraps the entire CMD process tree in a deny-default sandbox-exec profile,
+    providing session-level enforcement. Fail-open if sandbox-exec is absent
+    or BASHGUARD_SEATBELT=0.
+    """
+
+    def __init__(self, **kwargs):
+        self._project: Path | None = None
+
+    def set_project(self, path: str) -> "LaunchWrapper":
+        self._project = Path(path)
+        return self
+
+    def execute_launch(self, cmd: str) -> "Output":
+        from bashguard.seatbelt import exec_sandboxed_launch
+        project = self._project if self._project is not None else Path.cwd()
+        exec_sandboxed_launch(cmd, project)
+        return Output()  # unreachable after exec; satisfies grammar return type
 
 
 class Output(BaseOutput):
