@@ -19,7 +19,7 @@ Single package: `bashguard/`
 - `grammar.bnf` — data-grammar BNF for CLI
 - `types.py` — data-grammar Python types (Entry, AnalyzeScript, RunScript, LogQuery, StatsQuery, Output)
 
-## CLI modes (2026-05-06 current)
+## CLI modes (2026-07-09 current)
 - `bashguard hook` — Claude PreToolUse hook: reads JSON stdin, emits gates-compatible JSON or silent allow
 - `bashguard analyze -c 'cmd'` — full JSON audit report (debug)
 - `bashguard run -c 'cmd'` — **tilde-exec pattern**: audit + run in seatbelt sandbox, returns `{verdict, exit_code, stdout, stderr}`. Block exits 2, confirm exits 1, allow exits with command's exit code.
@@ -28,7 +28,7 @@ Single package: `bashguard/`
 - `bashguard approve/revoke <rule_id>` — session approval cache
 - `bashguard claude setup` — install hook symlinks
 
-## Rules (75 registered, 1238 tests passing — 2026-06-16)
+## Rules (75 registered, 1308 tests passing — 2026-07-09)
 
 ### Core detection
 - `parse.error_node` — malformed/obfuscated commands (HIGH)
@@ -103,8 +103,24 @@ FILESYSTEM_READ, FILESYSTEM_WRITE, FILESYSTEM_DELETE, FILESYSTEM_MOVE,
 NETWORK_OUTBOUND, GIT_SAFE, GIT_DESTRUCTIVE, PACKAGE_INSTALL, LANG_EXEC,
 PROCESS_SIGNAL, ENV_MUTATION, OBFUSCATED, CREDENTIAL_ACCESS, SYSTEM_CONFIG, UNKNOWN
 
+## Shared-repo worktree guard (2026-07-09)
+- `09-shared-repo-worktree-guard` hook — blocks branch-mutating git in main working dir of shared repos (system, heuristics)
+- Worktrees (.git FILE) and non-shared repos always allowed
+- Shipped to system main (PR #2 merged 2026-07-09), auto-distributed to all agents via 05-system-sync at next Stop
+- Source: `/var/db/ai/claude/prod/bashguard/hooks/09-shared-repo-worktree-guard`
+- Symlink at `~/.claude/hooks/PreToolUse.d/system/09-shared-repo-worktree-guard`
+
+## Colony deploy chain (verified 2026-07-09)
+Merge to main → post-merge hook fires → `production` branch advances → `/var/db/ai/claude/prod/<repo>` resets → `05-system-sync` Stop hook distributes `PreToolUse.d/system/0X-*` to all member repos at next session end. Zero-touch for colony-wide rollout.
+
+## P11 roadmap — next milestone (2026-07-09)
+**CONTRACT ENFORCEMENT**: PreToolUse hook enforcing /contract BOUNDARIES. Blocked on:
+1. the_management's decision: canonical compiled directory path (suggested: `the_management/contracts/directory.json`) + refresh mechanism (cupdate/colony-setup)
+2. the_management@ocean (twin) P11 milestone definition
+Sysop confirmed `colony-contracts` schema is stable. Do NOT start story until both answers arrive.
+
 ## Defense-in-depth stack (on ALLOW verdict)
-1. **Rule audit** — semantic detection (74 rules)
+1. **Rule audit** — semantic detection (75 rules)
 2. **Credential injection** — `bashguard/credentials.py`. Substitutes `{{KEY}}` placeholders. Real secrets never in Claude's context.
 3. **Seatbelt** — `bashguard/seatbelt.py`. `sandbox-exec -f profile.sb /bin/bash -c cmd`. Deny-default SBPL. Disable with `BASHGUARD_SEATBELT=0`.
 4. **FUSE shadow FS** — CoW overlay via FUSE-T (spike — not production, lives in `spike/`). Writes captured in memory, real dir untouched.
@@ -162,7 +178,7 @@ Single package: `bashguard/`
 - `grammar.bnf` — data-grammar BNF for CLI
 - `types.py` — data-grammar Python types (Entry, AnalyzeScript, RunScript, LogQuery, StatsQuery, Output)
 
-## CLI modes (2026-05-06 current)
+## CLI modes (2026-07-09 current)
 - `bashguard hook` — Claude PreToolUse hook: reads JSON stdin, emits gates-compatible JSON or silent allow
 - `bashguard analyze -c 'cmd'` — full JSON audit report (debug)
 - `bashguard run -c 'cmd'` — **tilde-exec pattern**: audit + run in seatbelt sandbox, returns `{verdict, exit_code, stdout, stderr}`. Block exits 2, confirm exits 1, allow exits with command's exit code.
@@ -171,7 +187,7 @@ Single package: `bashguard/`
 - `bashguard approve/revoke <rule_id>` — session approval cache
 - `bashguard claude setup` — install hook symlinks
 
-## Rules (75 registered, 1238 tests passing — 2026-06-16)
+## Rules (75 registered, 1308 tests passing — 2026-07-09)
 
 ### Core detection
 - `parse.error_node` — malformed/obfuscated commands (HIGH)
@@ -246,8 +262,24 @@ FILESYSTEM_READ, FILESYSTEM_WRITE, FILESYSTEM_DELETE, FILESYSTEM_MOVE,
 NETWORK_OUTBOUND, GIT_SAFE, GIT_DESTRUCTIVE, PACKAGE_INSTALL, LANG_EXEC,
 PROCESS_SIGNAL, ENV_MUTATION, OBFUSCATED, CREDENTIAL_ACCESS, SYSTEM_CONFIG, UNKNOWN
 
+## Shared-repo worktree guard (2026-07-09)
+- `09-shared-repo-worktree-guard` hook — blocks branch-mutating git in main working dir of shared repos (system, heuristics)
+- Worktrees (.git FILE) and non-shared repos always allowed
+- Shipped to system main (PR #2 merged 2026-07-09), auto-distributed to all agents via 05-system-sync at next Stop
+- Source: `/var/db/ai/claude/prod/bashguard/hooks/09-shared-repo-worktree-guard`
+- Symlink at `~/.claude/hooks/PreToolUse.d/system/09-shared-repo-worktree-guard`
+
+## Colony deploy chain (verified 2026-07-09)
+Merge to main → post-merge hook fires → `production` branch advances → `/var/db/ai/claude/prod/<repo>` resets → `05-system-sync` Stop hook distributes `PreToolUse.d/system/0X-*` to all member repos at next session end. Zero-touch for colony-wide rollout.
+
+## P11 roadmap — next milestone (2026-07-09)
+**CONTRACT ENFORCEMENT**: PreToolUse hook enforcing /contract BOUNDARIES. Blocked on:
+1. the_management's decision: canonical compiled directory path (suggested: `the_management/contracts/directory.json`) + refresh mechanism (cupdate/colony-setup)
+2. the_management@ocean (twin) P11 milestone definition
+Sysop confirmed `colony-contracts` schema is stable. Do NOT start story until both answers arrive.
+
 ## Defense-in-depth stack (on ALLOW verdict)
-1. **Rule audit** — semantic detection (74 rules)
+1. **Rule audit** — semantic detection (75 rules)
 2. **Credential injection** — `bashguard/credentials.py`. Substitutes `{{KEY}}` placeholders. Real secrets never in Claude's context.
 3. **Seatbelt** — `bashguard/seatbelt.py`. `sandbox-exec -f profile.sb /bin/bash -c cmd`. Deny-default SBPL. Disable with `BASHGUARD_SEATBELT=0`.
 4. **FUSE shadow FS** — CoW overlay via FUSE-T (spike — not production, lives in `spike/`). Writes captured in memory, real dir untouched.
