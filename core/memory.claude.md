@@ -33,15 +33,13 @@ Latest: `evasion.vim_shell` (HIGH) — vim/vi/view/ex/nvim -c ':!cmd', --cmd ':s
 - Deploy chain: merge to main → post-merge hook → `production` branch advances → prod worktree resets → `05-system-sync` distributes `PreToolUse.d/system/0X-*` to all members at next Stop
 - `/var/db/ai/claude/prod/bashguard` — production worktree
 
-## Active work — CONTRACT-ENFORCEMENT-HOOK
-Story written (`stories/contract-enforcement-hook.md`). Two-layer design (Sunir's correction):
-1. **Layer 1 (hot path)**: path-ownership check — agent touching another repo's root? Computable from `the_management/contracts/directory.json` + `<colony_root>/<repo>/` convention. Advisory warn + alert.
-2. **Layer 2 (Haiku, out-of-band)**: semantic judgment — is task within OWNS? Fire-and-forget, never blocks. Proposal, not verdict.
-- Canonical path: `the_management/contracts/directory.json` — schema `{generated_at, contracts:[{repo,role,owns,boundaries,collaborates}]}`
-- Fail-open: missing/stale/unparseable → warn + alert, always allow
-- **WRONG (corrected):** keyword-matching BOUNDARIES items — /contract is semantic, not statically computable
-- **Blocked on:** sysop adding `generated_at` to compiler; the_management committing first `directory.json`
-- Files to build: `hooks/11-contract-enforcement`, `hooks/lib/contract_path_check.py`, `hooks/lib/contract_semantic_check.py`
+## CONTRACT-ENFORCEMENT-HOOK — Layer 1 LIVE (2026-07-09)
+- `hooks/11-contract-enforcement` deployed to production, reading `the_management/contracts/directory.json` (4 contracts: seeds)
+- `hooks/lib/contract_path_check.py` — standalone module, no bashguard dep
+- Rate-limited (PR #13): mtime lock files in `/tmp/bashguard-contract-rl/`, once per (actor,target) per 5-min. Key pattern: `_ratelimit_ok "violation-${ACTOR}-${TARGET}" 300`
+- **Layer 2 (Haiku semantic)**: still pending — no blocking issue, just not started
+- **Open question**: "deploy touching qa" — live violation or stale cwd-based detection? the_management investigating.
+- **Rate-limit is mandatory for any PreToolUse hook that sends external alerts.** Fires per-tool-call = hundreds/session without dedup.
 
 
 # MEMORY.md
@@ -79,15 +77,13 @@ Latest: `evasion.vim_shell` (HIGH) — vim/vi/view/ex/nvim -c ':!cmd', --cmd ':s
 - Deploy chain: merge to main → post-merge hook → `production` branch advances → prod worktree resets → `05-system-sync` distributes `PreToolUse.d/system/0X-*` to all members at next Stop
 - `/var/db/ai/claude/prod/bashguard` — production worktree
 
-## Active work — CONTRACT-ENFORCEMENT-HOOK
-Story written (`stories/contract-enforcement-hook.md`). Two-layer design (Sunir's correction):
-1. **Layer 1 (hot path)**: path-ownership check — agent touching another repo's root? Computable from `the_management/contracts/directory.json` + `<colony_root>/<repo>/` convention. Advisory warn + alert.
-2. **Layer 2 (Haiku, out-of-band)**: semantic judgment — is task within OWNS? Fire-and-forget, never blocks. Proposal, not verdict.
-- Canonical path: `the_management/contracts/directory.json` — schema `{generated_at, contracts:[{repo,role,owns,boundaries,collaborates}]}`
-- Fail-open: missing/stale/unparseable → warn + alert, always allow
-- **WRONG (corrected):** keyword-matching BOUNDARIES items — /contract is semantic, not statically computable
-- **Blocked on:** sysop adding `generated_at` to compiler; the_management committing first `directory.json`
-- Files to build: `hooks/11-contract-enforcement`, `hooks/lib/contract_path_check.py`, `hooks/lib/contract_semantic_check.py`
+## CONTRACT-ENFORCEMENT-HOOK — Layer 1 LIVE (2026-07-09)
+- `hooks/11-contract-enforcement` deployed to production, reading `the_management/contracts/directory.json` (4 contracts: seeds)
+- `hooks/lib/contract_path_check.py` — standalone module, no bashguard dep
+- Rate-limited (PR #13): mtime lock files in `/tmp/bashguard-contract-rl/`, once per (actor,target) per 5-min. Key pattern: `_ratelimit_ok "violation-${ACTOR}-${TARGET}" 300`
+- **Layer 2 (Haiku semantic)**: still pending — no blocking issue, just not started
+- **Open question**: "deploy touching qa" — live violation or stale cwd-based detection? the_management investigating.
+- **Rate-limit is mandatory for any PreToolUse hook that sends external alerts.** Fires per-tool-call = hundreds/session without dedup.
 
 
 # data-grammar.md
