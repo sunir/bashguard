@@ -38,3 +38,12 @@
 - parser probe pattern is now stable enough to document as a wiki page: "rule authoring checklist" with the probe-first step
 - `less` and `more` also have GTFOBins shell escape via `!cmd` in interactive mode — but they're non-interactive in automated context so may be low-value
 - The 1336-test count feels like a milestone worth surfacing in readme or metrics endpoint
+
+---
+
+## Brainstorm — Session 5 (2026-07-09)
+
+- Rate-limit window of 5 min is a guess — ask the_management what cadence they actually want for routing alerts (real-time vs digest)
+- `_ratelimit_ok()` is generic enough to extract to hooks/lib/ratelimit.sh for reuse across all advisory hooks
+- The flood was 4x per operation — suggests the hook fires on every file in a multi-file tool call (MultiEdit). Could filter to only fire once per tool call, not per file path within a call
+- live-vs-stale question on "deploy touching qa" — if stale, the cwd-based Bash detection is the culprit (cwd of deploy repo triggers on every Bash call, even safe ones)

@@ -1,4 +1,21 @@
 
+## 2026-07-09 14:51 UTC — Session 5
+
+**Worked on:** Contract-enforcement hook rate-limiting (production fix)
+
+**Completed:**
+- Merged sleep branch (chore/sleep-20260709c) to main
+- PR #13: rate-limit advisory alerts — once per (actor,target) pair per 5-min window
+- Replied to the_management: fix done; live-vs-stale on "deploy touching qa" needs their ops context
+
+**Blocked:**
+- Live-vs-stale determination: the_management investigating deploy's PreToolUse calls
+- CONTRACT-ENFORCEMENT layer 2 (Haiku semantic): still waiting on sysop + the_management
+
+**Next action:** Wait for the_management's live/stale determination. If live → they route deploy back to its lane. If stale → may need to fix cwd-based Bash detection (fires even when Bash cwd is the agent's own repo, if that repo happens to match a foreign path).
+
+**Key gotcha:** Rate-limiting is mandatory for PreToolUse hooks. Any hook that sends an external alert MUST dedup or it floods the bus. Built `_ratelimit_ok()` pattern using mtime lock files in /tmp/.
+
 ## 2026-07-09 14:43 UTC — Session 4
 
 **Worked on:** evasion.vim_shell — vim/vi/ex shell escape via ex commands
