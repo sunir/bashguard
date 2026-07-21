@@ -96,7 +96,9 @@ _ratelimit_ok() {
   if [ -f "$lockfile" ]; then
     local now mtime age
     now=$(date +%s)
-    mtime=$(stat -f %m "$lockfile" 2>/dev/null || stat -c %Y "$lockfile" 2>/dev/null || echo 0)
+    # PORTABLE-STAT-MTIME: GNU-first — `stat -f %m` on Linux dumps garbage to
+    # stdout and exits 1; `stat -c %Y` is clean on Linux, BSD `-f` on macOS.
+    mtime=$(stat -c %Y "$lockfile" 2>/dev/null || stat -f %m "$lockfile" 2>/dev/null || echo 0)
     age=$(( now - mtime ))
     [ "$age" -lt "$window_secs" ] && return 1  # too soon
   fi
