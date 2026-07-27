@@ -10,10 +10,12 @@ transcripts/
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-07-02 10:06:13
+# Last sync: 2026-07-27 10:27:25
 
 # Prohibit patterns (must ignore)
 *.backup*
+*.db-shm
+*.db-wal
 *.pyc
 *.pyo
 *.tmp
@@ -51,16 +53,23 @@ transcripts/
 .claude/worktrees/
 .codex/
 .colony
+.colony.stop
 .deploy
 .empathy
+.env
 .focusmode
 .focusmode-log
 .focusmode-search-done
+.homeostat/automode-monitor.last
+.homeostat/cycle-total
+.homeostat/inactive-git-sync.last
 .idea/
+.maintain/state.json
 .msg/
 .pipes/
 .project.json
 .qa-review/
+.schedule/state.json
 .status-pin
 .status.yaml
 .strictmode
@@ -73,11 +82,11 @@ core/.rag-statusline
 core/.todo-statusline
 core/compressed-context.json
 issues/
+logs/
 mail/cur/*
 mail/new/*
 mail/tmp/*
 node_modules/
-projects/
 qa.jsonl
 rag_index/
 rules/*/[0-9][0-9]-*.md
