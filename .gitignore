@@ -10,7 +10,7 @@ transcripts/
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-08-07 16:05:07
+# Last sync: 2026-08-07 16:18:52
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -32,6 +32,7 @@ transcripts/
 .claude/agent-catalog.json
 .claude/agents/
 .claude/commands/
+.claude/heuristics.json
 .claude/hooks/*.d/system/
 .claude/hooks/.migration-version
 .claude/hooks/ConfigChange
