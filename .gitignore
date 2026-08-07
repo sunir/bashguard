@@ -10,7 +10,7 @@ transcripts/
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-07-27 10:27:25
+# Last sync: 2026-08-07 16:05:07
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -29,16 +29,20 @@ transcripts/
 .bugs.log
 .cache/
 .claude-map.json
+.claude/agent-catalog.json
 .claude/agents/
+.claude/commands/
 .claude/hooks/*.d/system/
 .claude/hooks/.migration-version
 .claude/hooks/ConfigChange
 .claude/hooks/Notification
 .claude/hooks/PermissionRequest
+.claude/hooks/PlanModeStop
 .claude/hooks/PostToolUse
 .claude/hooks/PostToolUseFailure
 .claude/hooks/PreCompact
 .claude/hooks/PreToolUse
+.claude/hooks/SessionEnd
 .claude/hooks/SessionStart
 .claude/hooks/Stop
 .claude/hooks/SubagentStart
@@ -50,6 +54,7 @@ transcripts/
 .claude/hooks/WorktreeRemove
 .claude/hooks/lib/
 .claude/settings.json
+.claude/skills/
 .claude/worktrees/
 .codex/
 .colony
@@ -60,9 +65,7 @@ transcripts/
 .focusmode
 .focusmode-log
 .focusmode-search-done
-.homeostat/automode-monitor.last
-.homeostat/cycle-total
-.homeostat/inactive-git-sync.last
+.homeostat/
 .idea/
 .maintain/state.json
 .msg/
@@ -100,7 +103,6 @@ transcripts/
 venv/
 
 # Require patterns (must track)
-!.claude/commands/
 !.claude/hooks/
 !.todo.json
 !CLAUDE.md
