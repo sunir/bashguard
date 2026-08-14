@@ -30,6 +30,49 @@ from bashguard.policy import PolicyConfig, decide
 from bashguard.project_config import load_project_config, merge_configs
 
 
+# ─── Flags helper (centralizes flag parsing) ──────────────────────────────────
+
+class Flags(Document):
+    """Flags subtype for bashguard CLI (stats/log query parameters).
+
+    Story: BG-CLI-FLAGS-VALIDATION — centralizes flag parsing for query subcommands.
+    Provides common flag methods (--days, --json, --verdict, --rule, --limit) that
+    work with both StatsQuery and LogQuery.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.flags = {}
+
+    def set_days(self, days: str) -> "Flags":
+        """Set days filter for stats."""
+        self.flags["days"] = int(days)
+        return self
+
+    def use_json(self) -> "Flags":
+        """Enable JSON output format."""
+        self.flags["json"] = True
+        return self
+
+    def filter_verdict(self, verdict: str) -> "Flags":
+        """Filter log entries by verdict (allow/block/confirm)."""
+        self.flags["verdict"] = verdict.lower()
+        return self
+
+    def filter_rule(self, rule_id: str) -> "Flags":
+        """Filter log entries by rule ID."""
+        self.flags["rule"] = rule_id
+        return self
+
+    def set_limit(self, n: str) -> "Flags":
+        """Set limit on returned entries."""
+        self.flags["limit"] = int(n)
+        return self
+
+    def __str__(self) -> str:
+        return ""
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _run_audit(script: str):
@@ -139,6 +182,42 @@ def _report_output(script: str) -> "Output":
 
 
 # ─── Grammar types ────────────────────────────────────────────────────────────
+
+class Flags(Document):
+    """Shared flags for query modes (stats/log).
+
+    Story: BG-CLI-FLAGS-VALIDATION — centralizes flag parsing for --days, --json,
+    --verdict, --rule, --limit. StatsQuery and LogQuery inherit from this to
+    inherit flag-handling methods.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.flags = {}
+
+    def set_days(self, days: str) -> "Flags":
+        self.flags["days"] = int(days)
+        return self
+
+    def use_json(self) -> "Flags":
+        self.flags["json"] = True
+        return self
+
+    def filter_verdict(self, verdict: str) -> "Flags":
+        self.flags["verdict"] = verdict.lower()
+        return self
+
+    def filter_rule(self, rule_id: str) -> "Flags":
+        self.flags["rule"] = rule_id
+        return self
+
+    def set_limit(self, n: str) -> "Flags":
+        self.flags["limit"] = int(n)
+        return self
+
+    def __str__(self) -> str:
+        return ""
+
 
 class Entry(Document):
     """Entry point — dispatches to hook or analyze mode."""
@@ -282,29 +361,18 @@ class RunScript(Document):
         return ""
 
 
-class StatsQuery(Document):
+class StatsQuery(Flags):
     """Stats query mode — aggregate audit log statistics.
 
-    Story: BG-CLI-FLAGS-VALIDATION — flag-style options (--days, --json) are
-    query parameters intrinsic to this subcommand, declared with
-    # compile:allow flag-outside-flags in grammar.bnf.
+    Story: BG-CLI-FLAGS-VALIDATION — inherits from Flags to accept --days, --json.
+    These flags are processed by the Flags grammar rule and passed through.
     """
 
-    def __init__(self, **kwargs):
-        self._days: int | None = None
-        self._as_json: bool = False
-
-    def set_days(self, days: str) -> "StatsQuery":
-        self._days = int(days)
-        return self
-
-    def use_json(self) -> "StatsQuery":
-        self._as_json = True
-        return self
-
     def __str__(self) -> str:
-        stats = compute_stats(days=self._days)
-        if self._as_json:
+        days = self.flags.get("days")
+        as_json = self.flags.get("json", False)
+        stats = compute_stats(days=days)
+        if as_json:
             return json.dumps(stats, indent=2)
         lines = [
             f"Total audited:  {stats['total']}",
@@ -323,43 +391,25 @@ class StatsQuery(Document):
         return "\n".join(lines)
 
 
-class LogQuery(Document):
+class LogQuery(Flags):
     """Log query mode — filters and displays audit log entries.
 
-    Story: BG-CLI-FLAGS-VALIDATION — flag-style options (--verdict, --rule,
-    --limit, --json) are query parameters intrinsic to this subcommand,
-    declared with # compile:allow flag-outside-flags in grammar.bnf.
+    Story: BG-CLI-FLAGS-VALIDATION — inherits from Flags to accept --verdict,
+    --rule, --limit, --json. These flags are processed by the Flags grammar rule
+    and passed through.
     """
 
-    def __init__(self, **kwargs):
-        self._verdict_filter: str | None = None
-        self._rule_filter: str | None = None
-        self._limit: int | None = None
-        self._as_json: bool = False
-
-    def filter_verdict(self, verdict: str) -> "LogQuery":
-        self._verdict_filter = verdict.lower()
-        return self
-
-    def filter_rule(self, rule_id: str) -> "LogQuery":
-        self._rule_filter = rule_id
-        return self
-
-    def set_limit(self, n: str) -> "LogQuery":
-        self._limit = int(n)
-        return self
-
-    def use_json(self) -> "LogQuery":
-        self._as_json = True
-        return self
-
     def __str__(self) -> str:
+        verdict_filter = self.flags.get("verdict")
+        rule_filter = self.flags.get("rule")
+        limit = self.flags.get("limit")
+        as_json = self.flags.get("json", False)
         entries = list(read_log(
-            decision=self._verdict_filter,
-            rule_id=self._rule_filter,
-            limit=self._limit,
+            decision=verdict_filter,
+            rule_id=rule_filter,
+            limit=limit,
         ))
-        if self._as_json:
+        if as_json:
             return json.dumps(entries, indent=2)
         lines = []
         for e in entries:
