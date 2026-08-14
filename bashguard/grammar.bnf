@@ -7,13 +7,17 @@
 # Key constraint: every pipeline step must consume a token or it won't fire.
 # Tokenless method chains are collapsed into a single method call.
 
-@import("stdlib.bnf", "stdlib")
-
 # compile:allow flag-outside-flags
-# AnalyzeScript, RunScript, StatsQuery, and LogQuery use flag-style literals
-# as data-flow selectors (--command/-c/--file choose WHAT to operate on;
-# --days/--json/--verdict/--rule/--limit are query parameters intrinsic to
-# each type). These are intentional per-subcommand options, not global meta-flags.
+# StatsQuery and LogQuery use flag-style literals as query parameters, not global
+# CLI flags. This is intentional per-subcommand design. Story: BG-CLI-FLAGS-VALIDATION
+
+# Flags type (base for common flag processing)
+Flags = ("--days" | "-d") &days<TEXT> :set_days > Flags
+      | "--json" :use_json > Flags
+      | ("--verdict" | "-v") &verdict<TEXT> :filter_verdict > Flags
+      | ("--rule" | "-r") &rule_id<TEXT> :filter_rule > Flags
+      | ("-n" | "--limit") &n<TEXT> :set_limit > Flags
+      ;
 
 @start = Entry @help({
   "tool": "bash-ast",
