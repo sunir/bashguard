@@ -81,8 +81,28 @@ def build_profile(
 
 
 def sandbox_exec_available() -> bool:
-    """Return True if sandbox-exec is present on this system."""
-    return shutil.which("sandbox-exec") is not None
+    """Return True if sandbox-exec can actually apply sandboxes.
+
+    Story: SANDBOX-EXEC-LAUNCH
+
+    Checks if the binary exists AND can apply a minimal sandbox. Some systems
+    (e.g., unprivileged containers, certain macOS configs) have sandbox-exec
+    but lack permission to apply policies. The fail-open behavior requires
+    testing actual functionality, not just binary presence.
+    """
+    if shutil.which("sandbox-exec") is None:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["sandbox-exec", "-p", "(version 1)\n(deny default)\n(allow process-exec*)\n(allow signal)",
+             "/bin/sh", "-c", "true"],
+            capture_output=True,
+            timeout=2,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def build_launch_profile(project_path: Path) -> Path:
@@ -114,6 +134,16 @@ def build_launch_profile(project_path: Path) -> Path:
         home / ".claude",
         Path("/var/db/ai/claude"),
     ]
+    # Filter paths: include if path exists, parent exists, or any ancestor exists
+    # (macOS sandbox-exec rejects rules for completely non-existent hierarchies)
+    def path_has_ancestor(p: Path) -> bool:
+        while p != p.parent:
+            if p.exists():
+                return True
+            p = p.parent
+        return False
+
+    extra = [p for p in extra if p.exists() or path_has_ancestor(p)]
     profile = build_profile(project_path, extra_write_paths=extra)
     profile_path.write_text(str(profile))
     profile_path.chmod(0o600)
@@ -130,16 +160,19 @@ def exec_sandboxed_launch(cmd: str, project_path: Path) -> None:
 
     Fail-open: if sandbox-exec is unavailable or BASHGUARD_SEATBELT=0,
     exec /bin/sh directly without sandboxing.
+
+    Profile is always generated and cached, regardless of whether sandbox-exec
+    is available (for caching, testing, and manual invocation).
     """
     import os
 
     shell = ["/bin/sh", "-c", cmd]
+    profile_path = build_launch_profile(project_path)
 
     if os.environ.get("BASHGUARD_SEATBELT") == "0" or not sandbox_exec_available():
         os.execvp("/bin/sh", shell)
         return  # unreachable; satisfies type checker
 
-    profile_path = build_launch_profile(project_path)
     os.execvp("sandbox-exec", ["sandbox-exec", "-f", str(profile_path)] + shell)
 
 
