@@ -1,0 +1,31 @@
+{
+  "session_id": "de5430fc-3590-45ea-b8c3-8b534ef48331",
+  "start_index": 1,
+  "end_index": 5,
+  "message_count": 5,
+  "compressed_at": "2026-04-07T02:10:29.070277",
+  "model_used": "groq:groq",
+  "window_number": 0,
+  "jsonl_file_path": "/Users/sunir/.claude/projects/-Users-sunir-source-bashguard/de5430fc-3590-45ea-b8c3-8b534ef48331.jsonl",
+  "message_uuids": [
+    "d37fd11d-e758-4e1b-b24e-7ed934a4f41a",
+    "73f5f285-6c93-4fcb-aa7e-0c88408bdcfb",
+    "e1bedc03-3837-4302-ac76-9511467a19af",
+    "b9730c2a-fc6a-4d5a-8400-be8902bfb0b9"
+  ],
+  "facets": {
+    "project": "_new:transcript_compression",
+    "objective": "Compress transcript for semantic recall",
+    "activity": [
+      "implementation"
+    ],
+    "domain": [
+      "software"
+    ],
+    "repos_mentioned": [
+      "None"
+    ],
+    "subproject": null,
+    "status": null
+  }
+}
