@@ -10,7 +10,7 @@ transcripts/
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-08-12 11:50:49
+# Last sync: 2026-09-02 05:25:02
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -66,8 +66,8 @@ transcripts/
 .focusmode
 .focusmode-log
 .focusmode-search-done
-.homeostat/automode-monitor.last
-.homeostat/cycle-total
+.homeostat/
+.hookstate/
 .idea/
 .maintain/state.json
 .msg/
