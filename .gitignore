@@ -8,9 +8,20 @@ transcripts/
 .status-pin
 .env
 
+.claude/
+memories/
+rules/
+!bashguard/rules/
+!tests/rules/
+done.log
+.deploy/
+.cache/
+!.deploy/public
+.qa_model
+
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-09-02 05:25:02
+# Last sync: 2026-09-11 18:15:08
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -33,6 +44,7 @@ transcripts/
 .claude/agents/
 .claude/commands/
 .claude/heuristics.json
+.claude/hooks/*.d/lib/
 .claude/hooks/*.d/system/
 .claude/hooks/.migration-version
 .claude/hooks/ConfigChange
@@ -42,15 +54,21 @@ transcripts/
 .claude/hooks/PostToolUse
 .claude/hooks/PostToolUseFailure
 .claude/hooks/PreCompact
+.claude/hooks/PreCompact.body
 .claude/hooks/PreToolUse
+.claude/hooks/PreToolUse.body
 .claude/hooks/SessionEnd
+.claude/hooks/SessionEnd.body
 .claude/hooks/SessionStart
+.claude/hooks/SessionStart.body
 .claude/hooks/Stop
+.claude/hooks/Stop.body
 .claude/hooks/SubagentStart
 .claude/hooks/SubagentStop
 .claude/hooks/TaskCompleted
 .claude/hooks/TeammateIdle
 .claude/hooks/UserPromptSubmit
+.claude/hooks/UserPromptSubmit.body
 .claude/hooks/WorktreeCreate
 .claude/hooks/WorktreeRemove
 .claude/hooks/lib/
@@ -123,13 +141,3 @@ venv/
 !stories/*.md
 
 # === END COLONY RULES ===
-.claude/
-memories/
-rules/
-!bashguard/rules/
-!tests/rules/
-done.log
-.deploy/
-.cache/
-!.deploy/public
-.qa_model
