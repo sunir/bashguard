@@ -21,7 +21,7 @@ done.log
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-09-01 20:00:24
+# Last sync: 2026-09-11 13:15:05
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -44,6 +44,7 @@ done.log
 .claude/agents/
 .claude/commands/
 .claude/heuristics.json
+.claude/hooks/*.d/lib/
 .claude/hooks/*.d/system/
 .claude/hooks/.migration-version
 .claude/hooks/ConfigChange
@@ -53,15 +54,21 @@ done.log
 .claude/hooks/PostToolUse
 .claude/hooks/PostToolUseFailure
 .claude/hooks/PreCompact
+.claude/hooks/PreCompact.body
 .claude/hooks/PreToolUse
+.claude/hooks/PreToolUse.body
 .claude/hooks/SessionEnd
+.claude/hooks/SessionEnd.body
 .claude/hooks/SessionStart
+.claude/hooks/SessionStart.body
 .claude/hooks/Stop
+.claude/hooks/Stop.body
 .claude/hooks/SubagentStart
 .claude/hooks/SubagentStop
 .claude/hooks/TaskCompleted
 .claude/hooks/TeammateIdle
 .claude/hooks/UserPromptSubmit
+.claude/hooks/UserPromptSubmit.body
 .claude/hooks/WorktreeCreate
 .claude/hooks/WorktreeRemove
 .claude/hooks/lib/
