@@ -21,7 +21,7 @@ done.log
 
 # === COLONY MANAGED RULES ===
 # Do not edit - managed by: colony git sync
-# Last sync: 2026-09-11 13:15:05
+# Last sync: 2026-09-17 15:53:55
 
 # Prohibit patterns (must ignore)
 *.backup*
@@ -77,8 +77,9 @@ done.log
 .claude/worktrees/
 .codex/
 .colony
+.colony.daemon
 .colony.stop
-.deploy
+.deploy/*
 .empathy
 .env
 .focusmode
@@ -125,7 +126,6 @@ venv/
 
 # Require patterns (must track)
 !.claude/hooks/
-!.todo.json
 !CLAUDE.md
 !core/emoji
 !core/focus.md
