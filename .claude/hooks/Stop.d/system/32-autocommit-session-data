@@ -1,0 +1,107 @@
+#!/bin/bash
+# Plugin: autocommit-session-data (Stop)
+#
+# Story: AUTOCOMMIT-STALE-LOCK, AUTOCOMMIT-PATHSPEC-LIMITED,
+#        STOP-DELETE-AUTOMODE-DUPLICATES (extracted here)
+#
+# PURPOSE: commit machine-generated session files (hooks, transcripts,
+#   memories — whatever the .gitautocommit patterns name) so they do not
+#   accumulate as permanent working-tree noise that every later git check
+#   has to look past.
+#
+# WHY IT LIVES HERE NOW: this was a side effect buried inside
+#   lib/stop/git.sh, whose OTHER job was deciding whether git state should
+#   block the stop. That decision duplicated automode's own gitorphans
+#   sensor and git_orphans guard, so git.sh was deleted — but this is not a
+#   decision and automode does not do it, so deleting it with the rest would
+#   have silently stopped session data being committed colony-wide. Split
+#   out rather than swept out.
+#
+# CONTRACT: pure side effect. Emits no next_turn, never blocks, always
+#   exits 0. It cannot influence whether the session stops.
+
+set -uo pipefail
+
+command -v git >/dev/null 2>&1 || exit 0
+git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+
+repo_top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[[ -n "$repo_top" ]] || exit 0
+
+# Story: VENDORED-FORK-EXCLUDED-FROM-COLONY-SYNC. A repo carrying this
+# marker is vendored third-party code (origin may point at a stranger's
+# GitHub repo, or a personal fork of one) -- colony-managed commits here
+# are noise at best, and at worst something colony_git_sync tries to push
+# toward someone else's public repo. Checked before any pattern loading.
+[[ -f "$repo_top/.vendored-fork" ]] && exit 0
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+hooks_dir="$(cd "$script_dir/../.." && pwd)"
+system_root="$(cd "$hooks_dir/../.." && pwd)"
+colony_root="${COLONY_ROOT:-$(cd "$system_root/.." && pwd)}"
+
+_stop_log="${_stop_log:-${HOOK_STOP_LOG_DIR:-/tmp/$(basename "$PWD")}/Stop.log}"
+
+NEUTRAL_PATTERNS=()
+AUTO_STAGED=()
+
+load_patterns() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r pat; do
+        [[ -z "$pat" || "$pat" == \#* ]] && continue
+        NEUTRAL_PATTERNS+=("$pat")
+    done < "$file"
+}
+
+# AUTOCOMMIT-STALE-LOCK (%58, 2026-07-16 ruling): a process that dies
+# mid-write leaves .git/index.lock behind forever — git does not track lock
+# ownership by PID, so every later commit attempt in the repo (this hook AND
+# a live session's own manual commit) fails or hangs on the stranded lock
+# with zero signal. Clear only a STALE lock (older than 5 min, matching the
+# incident that prompted this: a 17-min-old lock from a dead process). A
+# FRESH lock is a genuinely concurrent, alive writer — clobbering it would
+# corrupt that writer's commit.
+lock="$repo_top/.git/index.lock"
+if [[ -f "$lock" ]] && find "$lock" -mmin +5 2>/dev/null | grep -q .; then
+    rm -f "$lock"
+    echo "32-autocommit-session-data: cleared stale index.lock (older than 5m)" >&2
+fi
+
+load_patterns "$colony_root/system/config/gitautocommit"
+load_patterns "$repo_top/.gitautocommit"
+
+[[ "${#NEUTRAL_PATTERNS[@]}" -gt 0 ]] || exit 0
+
+for pattern in "${NEUTRAL_PATTERNS[@]}"; do
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        filepath="${line:3}"
+        AUTO_STAGED+=("$filepath")
+        # A failed `git add` still leaves the path in AUTO_STAGED, so the
+        # commit below would silently omit it — log so that is discoverable.
+        git add -- "$filepath" 2>/dev/null \
+            || printf 'dispatcher autocommit git-add-failed path=%s\n' "$filepath" \
+                >> "${_stop_log:-/dev/null}" 2>/dev/null
+    done < <(git status --short --ignore-submodules=all 2>/dev/null | grep " ${pattern}")
+done
+
+[[ "${#AUTO_STAGED[@]}" -gt 0 ]] || exit 0
+
+# AUTOCOMMIT-PATHSPEC-LIMITED: pathspec-limited to exactly the files THIS
+# hook staged. A bare `git commit` commits the whole index — live incident
+# (2026-08-11): a session's own in-progress `git rm` deletions were swept
+# into a commit claiming to be machine-generated-only. Same fix as the
+# sibling 56-memory-commit hook (MEMORY-COMMIT-PER).
+git commit -m "chore: auto-commit session data (hooks, transcripts, memories)
+
+Automated commit of machine-generated session files.
+No LLM attention required." \
+    --no-verify -- "${AUTO_STAGED[@]}" 2>/dev/null
+_rc=$?
+if [[ $_rc -ne 0 ]]; then
+    printf 'dispatcher autocommit git-commit-failed staged_count=%s exit_code=%s\n' \
+        "${#AUTO_STAGED[@]}" "$_rc" >> "${_stop_log:-/dev/null}" 2>/dev/null
+fi
+
+exit 0

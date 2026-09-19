@@ -1,0 +1,14 @@
+#!/bin/bash
+# Plugin: agent-sentinel (SubagentStop)
+#
+# Removes .claude/agents/<agent_id>.active when a subagent completes.
+# Paired with SubagentStart.d/system/10-agent-sentinel.
+
+INPUT=$(cat)
+command -v jq >/dev/null 2>&1 || exit 0
+
+AGENT_ID="$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null)"
+[[ -n "$AGENT_ID" ]] || exit 0
+
+rm -f ".claude/agents/$AGENT_ID.active" 2>/dev/null
+exit 0

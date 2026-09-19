@@ -1,0 +1,45 @@
+#!/bin/bash
+# Plugin: automode.message.d/25-watch-files
+# Story: automode-pair-programming
+#
+# Converts a file-changed wakeup into a message with the full git diff.
+# Claude sees the diff and can pair program: review, continue, or ask questions.
+#
+# CONTRACT (automode.message.d message plugin)
+# - Called once per wakeup with $1 = raw wakeup reason string
+# - stdout: message text to show Claude (empty = nothing to add)
+# - exit 0 always
+
+REASON="${1:-}"
+[[ "$REASON" != "file-changed:"* ]] && exit 0
+
+command -v git >/dev/null 2>&1 || exit 0
+git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+
+# Build diff — staged + unstaged, stat summary first then full diff
+STAT="$(git diff --stat HEAD 2>/dev/null || true)"
+DIFF="$(git diff HEAD 2>/dev/null || true)"
+
+if [[ -z "$DIFF" && -z "$STAT" ]]; then
+    # Nothing to show (file saved then reverted, or binary file)
+    exit 0
+fi
+
+# Cap diff at ~200 lines to avoid flooding context
+DIFF_LINES="$(echo "$DIFF" | wc -l | tr -d ' ')"
+if [[ "$DIFF_LINES" -gt 200 ]]; then
+    DIFF="$(echo "$DIFF" | head -200)
+... (diff truncated at 200 lines — run Bash(git diff HEAD) for full diff)"
+fi
+
+cat <<MSG
+The user edited files while you were idle. Review the changes and continue working together.
+
+\`\`\`diff
+${DIFF}
+\`\`\`
+
+${STAT}
+
+What changed: ${REASON#file-changed: }
+MSG

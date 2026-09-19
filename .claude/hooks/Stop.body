@@ -1,0 +1,78 @@
+#!/bin/bash
+# Stop hook dispatcher
+#
+# INPUT (JSON via stdin):
+#   {
+#     "session_id":            "uuid",
+#     "transcript_path":       "/path/to/<id>.jsonl",
+#     "cwd":                   "/path/to/repo",
+#     "permission_mode":       "bypassPermissions" | "default",
+#     "hook_event_name":       "Stop",
+#     "stop_hook_active":      false,
+#     "last_assistant_message": "..."
+#   }
+#
+# OUTPUT:
+#   Exit 0 = allow stop
+#   Exit 2 = block stop (stderr shown to Claude as error)
+#
+# CONTROLLER MODEL (Story: STOP-HOOK-BRIEFING, STOP-HOOK-STRIP-AUTOMODE):
+#
+#   Stop is the executable entrypoint. The controller lives in lib/stop/*.
+#   It runs every Stop.d plugin, collects what they say, and decides.
+#
+#   1. common.sh setup_hook_env establishes generic hook env only
+#   2. stop_bootstrap_env establishes Stop paths/log/input capture
+#   3. check_hook_guards (lib/common.sh) reports session/network/auth
+#      trouble; run after bootstrap so its logging exists even on this exit
+#      path, and called explicitly here rather than run implicitly by
+#      setup_hook_env — Stop decides for itself what a guard firing means
+#   4. stop_run collects plugin messages and decides next_turn
+#   5. next_turn=continue renders a briefing and exits 2
+#   6. next_turn=stop or nothing-said exits 0 quietly
+
+# _source <path> <what breaks without it> — FAIL CLOSED, not open. Before
+# this existed, a missing library made `source` fail silently (no `set -e`
+# here); the next dependent call then hit "command not found" and got
+# treated as an ordinary decision (e.g. a guard's `|| exit 0` swallowing the
+# error as "allow") — the whole hook going inert with zero visible signal.
+# That is the exact blast radius a wiped lib/ has (2026-07-08 disaster). A
+# missing library must be loud and block, not silent. `source` runs here,
+# not in a subshell, so anything the file defines lands in this dispatcher's
+# own scope. Defined identically at the top of every dispatcher (Stop,
+# PreToolUse, UserPromptSubmit, SessionStart, SessionEnd, PreCompact) --
+# has to be duplicated, since it's what loads lib/common.sh itself, before
+# anything shared can exist to call.
+_source() {
+    local path="$1" consequence="$2"
+    if [[ ! -f "$path" ]]; then
+        echo "FATAL: hook library missing: $path" >&2
+        echo "$consequence — blocking rather than silently allowing it." >&2
+        exit 2
+    fi
+    source "$path"
+}
+
+_source "$(dirname "$0")/lib/common.sh" \
+    "SCRIPT_DIR/REPO_ROOT/guards cannot be established without it"
+_source "$(dirname "$0")/lib/stop/controller.sh" \
+    "Plugin collection and the next_turn decision cannot run without it"
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    setup_hook_env
+    stop_bootstrap_env || exit 0
+    # Story: NETWORK-DOWN-GUARD. Stop alone has a 24-hour hook timeout
+    # (claude/settings.json) to afford blocking through a network guard
+    # failure with backoff rather than falling through -- see
+    # guard_network_down_blocking in lib/common.sh for why every other
+    # dispatcher must not do this.
+    export NETWORK_GUARD_BLOCKING=1
+    [[ "${SKIP_GUARDS:-}" == "1" ]] || check_hook_guards >/dev/null || exit 0  # message discarded -- Stop just allows the stop too, but already has _stop_log for anyone who needs the reason
+else
+    return 0 2>/dev/null || true
+fi
+
+# Story: STOP-BRIEFING-RELAX-SUPPRESS
+# Suppression is implemented inside stop_run.
+stop_run
+exit $?

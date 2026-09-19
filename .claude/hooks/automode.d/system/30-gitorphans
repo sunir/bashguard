@@ -1,0 +1,85 @@
+#!/bin/bash
+# Poster: automode.d/system/30-gitorphans
+# Story: POSTER-GITORPHANS (%POSTER-GITORPHANS)
+#
+# Posts `git_orphan` when a branch holds work that exists nowhere but here.
+#
+#   30-gitorphans --once     check now, post if there are orphans, exit  (default)
+#   30-gitorphans --watch    the same, re-run whenever refs change
+#
+# THIS WATCHER WAS DEAD, and had been since it was written. Its guard was
+#
+#     command -v gitorphans >/dev/null 2>&1 || exit 0
+#
+# and no `gitorphans` binary has ever been on PATH. system/scripts/gitorphans
+# exists but is not in system's deploy.toml, so it was never deployed. Because
+# the guard is fail-open, a check that could not run reported success every
+# cycle, and automode has never once woken for an orphaned branch. Found by
+# system's audit (msg 174); the diagnosis there said the binary did not exist,
+# and it is subtler than that -- it exists and was never delivered.
+#
+# THE FIX IS TO STOP NEEDING IT. sensors/gitorphans.sh already answers this with
+# git for-each-ref directly, so this does the same and the dead dependency
+# disappears rather than being satisfied. Deploying the binary would have made
+# the guard pass while leaving a plugin that depends on something nothing else
+# does.
+#
+# WHICH LEAVES ONE REAL HAZARD, and tests/test-poster-gitorphans.sh exists for
+# it: two implementations of "what counts as an orphan" can drift, and the
+# failure would be a LOOP rather than a wrong number -- the poster wakes on
+# something the gauntlet does not consider novel, the gauntlet falls through, we
+# sleep, and the poster wakes again. The auto-commit predicate below is
+# character-for-character the sensor's, and the test asserts the two agree on
+# every world it sets up. If you change one, the test fails until you change the
+# other, which is the only thing that keeps them honest.
+
+set -uo pipefail
+
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/post.sh"
+
+[ -d .git/refs/heads ] || exit 0
+command -v git >/dev/null 2>&1 || exit 0
+
+# Commits an agent or a human made -- not ones a background process made.
+# Identical to sensors/gitorphans.sh's _count_human_commits. See the header.
+_orphan_human_commits() {
+    git log "$@" --format='%ae%x09%s%x09%(trailers:key=X-Auto-Commit,valueonly=true)' 2>/dev/null \
+        | awk -F'\t' '
+            $3 ~ /^[Tt]rue/                            { next }
+            $2 == "chore: secretary auto-commit"       { next }
+            $2 ~ /^chore: auto-commit session data/    { next }
+            $2 ~ /^chore: memory snapshot \[auto\]/    { next }
+            { n++ }
+            END { print n+0 }
+        '
+}
+
+automode_poster_message() {
+    local branches="" b upstream n
+
+    while IFS=$'\t' read -r b upstream; do
+        [ -n "$b" ] || continue
+        if [ -n "$upstream" ]; then
+            n="$(_orphan_human_commits "${upstream}..refs/heads/${b}")"
+            [ "${n:-0}" -gt 0 ] && branches="${branches}  ${b} (ahead ${n})
+"
+        else
+            n="$(_orphan_human_commits "refs/heads/${b}" --not --remotes)"
+            [ "${n:-0}" -gt 0 ] && branches="${branches}  ${b} (${n} local commits)
+"
+        fi
+    done <<< "$(git for-each-ref --format='%(refname:short)%09%(upstream:short)' refs/heads/ 2>/dev/null)"
+
+    [ -n "$branches" ] || return 1
+
+    # AFFORDANCE RULE: the message carries what can be done about it, not just
+    # what is true. An agent told "you have orphans" and not told how to resolve
+    # them is being given a fact it cannot act on.
+    printf 'Unpushed work exists only on this machine:\n%s\nRun: Bash(git push) on each, or delete the branch if it is dead.' \
+        "$branches"
+}
+
+# Refs are what change when a branch gains or loses commits, so that is what we
+# watch. Not the working tree -- a commit that does not move a ref is not an
+# orphan, and a ref that moves without a commit still needs re-counting.
+automode_post_main "${1:---once}" git_orphan .git/refs/heads

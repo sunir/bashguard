@@ -1,0 +1,35 @@
+#!/bin/bash
+# Plugin: model-behavior (UserPromptSubmit) — system-wide
+#
+# PURPOSE: Inject per-model behavior correctors. Different models have
+#   different failure modes; a short reminder at prompt time nudges the
+#   agent to compensate.
+#
+# MODEL DETECTION: UserPromptSubmit INPUT has no model field, so read
+#   .message.model from the transcript's last assistant entry (same source
+#   the context-engine uses). Falls back silently if unavailable.
+#
+# RULES:
+#   - Opus (claude-opus-*): absent-minded — listen carefully, don't paraphrase.
+#
+# OUTPUT: stdout advisory (added to prompt context). Empty if no rule matches.
+# FAIL-OPEN: any error → exit 0 silently.
+
+INPUT=$(cat)
+command -v jq >/dev/null 2>&1 || exit 0
+
+TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+[[ -z "$TRANSCRIPT" || ! -f "$TRANSCRIPT" ]] && exit 0
+
+# Last assistant message's model ID. grep narrows before jq for speed.
+MODEL_ID=$(grep '"type":"assistant"' "$TRANSCRIPT" 2>/dev/null | tail -1 \
+    | jq -r '.message.model // empty' 2>/dev/null)
+[[ -z "$MODEL_ID" ]] && exit 0
+
+case "$MODEL_ID" in
+    claude-opus-*)
+        echo "You're on the Opus model, which is absent-minded. Carefully listen to the user. Never paraphrase but faithfully reflect specific instructions."
+        ;;
+esac
+
+exit 0

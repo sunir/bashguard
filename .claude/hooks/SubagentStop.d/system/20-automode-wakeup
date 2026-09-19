@@ -1,0 +1,76 @@
+#!/bin/bash
+# Plugin: 20-automode-wakeup (SubagentStop)
+# Story: SUBAGENT-STOP-AUTOMODE, AUTOMODE-BACKGROUND-AGENT-EXIT,
+#        SUBAGENTSTOP-ORPHANED-EVENTS-LIVE-FIX
+#
+# When a background Agent() completes, wake automode relax so Claude can
+# process the result without waiting for the transcript-poll timeout.
+#
+# Story: SUBAGENT-STOP-DURABLE-SENTINEL-FIRST (automode msg %7406) --
+# the durable sentinel is written unconditionally, always, first. `-p
+# "$pipe"` only tests the path is a FIFO special file -- true for one left
+# behind by a crashed/exited former relax-wait with zero live readers, same
+# as a live one. The old if-FIFO/else-sentinel branch took the FIFO path
+# for a stale FIFO, wrote into the void (a non-blocking open+write to a
+# FIFO with no reader succeeds), and never fell back -- silently losing the
+# completion. The FIFO write is now a separate, best-effort latency
+# optimization attempted afterward: a live reader wakes immediately; if
+# stale or absent, the sentinel already written a moment earlier is there
+# for `bin/subagents claim` regardless.
+#
+# Uses exec 3<>"$pipe" (open r+w) to write non-blocking to the FIFO:
+# opening for both read and write never blocks even with no reader.
+
+INPUT=$(cat)
+command -v jq >/dev/null 2>&1 || exit 0
+
+AGENT_ID="$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null)"
+[[ -n "$AGENT_ID" ]] || exit 0
+
+# Claude Code emits SubagentStop for at least one internal mechanism that is
+# not a real Task-tool subagent (agent_type "", agent_transcript_path never
+# written -- confirmed live 2026-08-14, /tmp/sysop/SubagentStop.log: an
+# event whose last_assistant_message was literally the MAIN session's own
+# prior turn, wrongly surfaced as "Subagent finished"). hook_field_path_exists
+# (lib/common.sh, story SUBAGENTSTOP-ORPHANED-EVENTS) exists for exactly this
+# -- a claimed path is not a guarantee, verify it. Fail-open if common.sh
+# isn't reachable: better to occasionally surface a phantom wakeup than to
+# silently swallow every real one because a library failed to load.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
+[[ -f "$LIB_DIR/common.sh" ]] && source "$LIB_DIR/common.sh" 2>/dev/null
+if declare -F hook_field_path_exists >/dev/null 2>&1; then
+    hook_field_path_exists agent_transcript_path || exit 0
+fi
+
+# Story: SUBAGENT-STOP-PENDING-SESSION-SCOPE (todo %669) -- the sentinel
+# records which session's subagent this is, so a consumer (system/bin/
+# subagents) can tell "mine" from "someone else's SubagentStop landed in
+# the same repo" instead of reacting to any agent_id regardless of owner.
+SESSION_ID_FIELD="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+
+# Durable sentinel, unconditional, first — atomic temp+rename so a reader
+# racing this write never sees a partially-written file.
+if [[ -d ".automode" ]]; then
+    _sentinel_tmp="$(mktemp ".automode/subagent-stop-pending.XXXXXX" 2>/dev/null)"
+    if [[ -n "$_sentinel_tmp" ]]; then
+        jq -cn --arg agent_id "$AGENT_ID" --arg session_id "$SESSION_ID_FIELD" \
+            '{agent_id: $agent_id, session_id: (if $session_id == "" then null else $session_id end)}' \
+            > "$_sentinel_tmp" 2>/dev/null \
+            && mv -f "$_sentinel_tmp" ".automode/subagent-stop-pending" 2>/dev/null \
+            || rm -f "$_sentinel_tmp"
+    fi
+fi
+
+# Best-effort latency optimization: if a relax-wait is actively reading the
+# FIFO right now, wake it immediately instead of waiting for the next Stop
+# cycle to notice the sentinel above. A stale/absent FIFO is a no-op here --
+# the sentinel already covers it.
+command -v pipename >/dev/null 2>&1 || exit 0
+pipe="$(pipename 2>/dev/null)"
+if [[ -p "$pipe" ]]; then
+    exec 3<>"$pipe"
+    printf 'SubagentStop: %s\n' "$AGENT_ID" >&3
+    exec 3>&-
+fi
+exit 0

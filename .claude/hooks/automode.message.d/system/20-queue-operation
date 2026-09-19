@@ -1,0 +1,29 @@
+#!/bin/bash
+# Plugin: automode.message.d/20-queue-operation
+# Story: focusmode-fsm
+#
+# Converts queue-operation wakeup into a clean user-facing message.
+# Strips the [bash] [20-queue-operation] wrapper so queued prompts and
+# background agent notifications are shown without merge-stdout labels.
+#
+# CONTRACT (automode.message.d message plugin)
+# - Called once per wakeup with $1 = raw wakeup reason string
+# - stdout: message text to show Claude (empty = nothing to add)
+# - exit 0 always
+
+REASON="${1:-}"
+[[ "$REASON" != *"[20-queue-operation]"* ]] && exit 0
+
+case "$REASON" in
+    *"Agent: "*)
+        CONTENT="${REASON#*Agent: }"
+        printf 'Agent: %s\n' "$CONTENT"
+        ;;
+    *"Queued: "*)
+        CONTENT="${REASON#*Queued: }"
+        [[ -z "$CONTENT" ]] && exit 0
+        printf '%s\n' "$CONTENT"
+        ;;
+esac
+
+exit 0

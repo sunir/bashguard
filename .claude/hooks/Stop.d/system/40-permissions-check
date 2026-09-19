@@ -1,0 +1,41 @@
+#!/bin/bash
+# Plugin: permissions-check (Stop)
+# Story: permissions-management
+#
+# PURPOSE: Warn if hook files have permission issues (not executable).
+#   Fires on every Stop. Non-blocking — permissions problems shouldn't
+#   prevent the session from stopping, but Claude should know about them.
+#
+# PROTOCOL: stdout empty, stderr contains warnings.
+#   Exit 0 always — never blocks.
+
+INPUT=$(cat)  # Consume stdin per hook protocol
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Plugin lives at Stop.d/system/ — go 2 levels up to reach hooks root
+HOOKS_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# Repo root is 2 more levels up from hooks root (.claude/hooks → .claude → repo)
+REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
+
+# Find permissions-check: first in this repo's scripts/, then sibling system/ repo
+# (non-system repos like Spiral don't have scripts/; system scripts live in system/)
+if [[ -x "$REPO_ROOT/scripts/permissions-check" ]]; then
+    PERM_CHECK="$REPO_ROOT/scripts/permissions-check"
+elif [[ -x "$REPO_ROOT/../system/scripts/permissions-check" ]]; then
+    PERM_CHECK="$REPO_ROOT/../system/scripts/permissions-check"
+else
+    exit 0  # Fail-open: permissions-check not found
+fi
+
+# Run check — capture issues
+ISSUES="$("$PERM_CHECK" 2>/dev/null)" || true
+
+if [[ -n "$ISSUES" ]]; then
+    echo "⚠️  [PERMISSIONS] Hook permission issues detected:" >&2
+    echo "$ISSUES" | while IFS= read -r issue; do
+        echo "    $issue" >&2
+    done
+    echo "    Run: colony repair-permissions" >&2
+fi
+
+exit 0

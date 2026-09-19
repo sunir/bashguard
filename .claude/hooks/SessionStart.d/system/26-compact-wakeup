@@ -1,0 +1,40 @@
+#!/bin/bash
+# Plugin: compact-wakeup (SessionStart)
+# Story: CONTEXT-ENGINE-PLUGIN
+#
+# PURPOSE: After context compaction, execute the wakeup protocol so the agent
+#   reorients to current session state. Injects wakeup.md content directly
+#   (agents can't call slash commands from hooks).
+#
+# WHEN: Fires only on SessionStart with source=compact.
+
+set -euo pipefail
+
+INPUT="${INPUT:-$(cat)}"
+
+SOURCE="$(printf '%s' "$INPUT" | jq -r '.source // ""')"
+[[ "$SOURCE" == "compact" ]] || exit 0
+
+# Find wakeup.md — prefer repo-local, fall back to system
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+WAKEUP_MD=""
+for candidate in \
+    "$REPO_ROOT/.claude/commands/wakeup.md" \
+    "$(dirname "$0")/../../../../commands/wakeup.md"; do
+    [[ -f "$candidate" ]] && { WAKEUP_MD="$candidate"; break; }
+done
+
+# Stdout is injected into Claude's initial context on SessionStart
+echo "== POST-COMPACTION WAKEUP =="
+echo "Context was just compacted. Execute the wakeup protocol below to restore"
+echo "session context (notes, focus, todos, memories) before continuing any work."
+echo ""
+
+if [[ -n "$WAKEUP_MD" ]]; then
+    cat "$WAKEUP_MD"
+else
+    echo "Read sessions/notes.md, core/focus.md, core/memory.md, then resume work."
+fi
+
+echo ""
+echo "== END POST-COMPACTION WAKEUP =="

@@ -1,0 +1,111 @@
+#!/bin/bash
+# Plugin: prod-write-guard (PreToolUse)
+# Story: PROD-WRITE-GUARD
+#
+# PURPOSE: Block Write/Edit/MultiEdit and write-shaped Bash commands (cp, mv,
+#   sed -i, tee, redirects — via bash-decomposer) from targeting anything
+#   under the prod deployment root (default $CLAUDE_HOME/prod).
+#
+#   Prod is a deploy TARGET, kept in sync by each repo's post-merge git hook
+#   (git reset --hard on merge to main) — it is never a source of truth.
+#   An agent editing it directly gets silently overwritten on the next
+#   deploy, and the change never reaches origin. The fix always belongs in
+#   the matching source repo under ~/source/colony/<repo>.
+#
+# PROTOCOL: PreToolUse exit 2 + stdout message → block tool call.
+#           exit 0 → allow.
+# FAIL-OPEN: any missing tool/parse error → exit 0 (allow).
+
+INPUT="$(cat)"
+
+command -v jq >/dev/null 2>&1 || exit 0
+
+PROD_ROOT="${PROD_ROOT:-${CLAUDE_HOME:-$(eval echo ~claude)}/prod}"
+# Resolve to a real path when it exists so symlink components don't defeat
+# the prefix check; fall back to the raw value (still a valid prefix check)
+# when the directory doesn't exist yet (e.g. in tests).
+PROD_ROOT_CANON="$(cd "$PROD_ROOT" 2>/dev/null && pwd -P || echo "$PROD_ROOT")"
+PROD_ROOT_CANON="${PROD_ROOT_CANON%/}"
+
+# Sets _CANON_PATH as a side effect so callers use the exact same
+# canonicalized value in the block message that the check itself used
+# (symlink components, e.g. macOS /var -> /private/var, must resolve
+# identically on both sides or the message's repo-name extraction breaks).
+_CANON_PATH=""
+_is_under_prod() {
+    local path="$1"
+    [[ -z "$path" ]] && return 1
+    # Resolve to absolute (best effort — don't require the path to exist)
+    if [[ "$path" != /* ]]; then
+        path="$(pwd)/$path"
+    fi
+    local dir base resolved_dir
+    dir="$(dirname "$path")"
+    base="$(basename "$path")"
+    resolved_dir="$(cd "$dir" 2>/dev/null && pwd -P || echo "$dir")"
+    path="$resolved_dir/$base"
+    _CANON_PATH="$path"
+    [[ "$path" == "$PROD_ROOT_CANON"/* ]]
+}
+
+_block() {
+    local path="$1"
+    local rel="${path#"$PROD_ROOT_CANON"/}"
+    local repo_name="${rel%%/*}"
+    echo "BLOCKED: $path is inside the prod deployment directory (read-only from tool calls)."
+    echo ""
+    echo "Prod is a deploy target — each repo's post-merge git hook syncs it"
+    echo "automatically (git reset --hard) whenever main is merged. A direct"
+    echo "edit here is silently overwritten on the next deploy and never"
+    echo "reaches origin."
+    echo ""
+    echo "Edit the source repo instead:"
+    echo ""
+    echo "  ~/source/colony/$repo_name"
+    echo ""
+    echo "Then commit and merge to main — it deploys to prod automatically."
+    echo ""
+    # Story: PROD-GUARD-ROUTE
+    echo "If no matching source file exists (a worktree's hand-seeded .env,"
+    echo "or any other artifact the post-merge hook doesn't regenerate),"
+    echo "do not ask a human to edit it for you -- that bypasses this guard"
+    echo "the same way a direct tool write would. Route it to whoever owns"
+    echo "$repo_name (or the deploy tooling) instead: this is their gap to"
+    echo "close, not something to route around."
+    exit 2
+}
+
+tool_name="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)"
+[[ -z "$tool_name" ]] && exit 0
+
+case "$tool_name" in
+    Write|Edit|MultiEdit)
+        file_path="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // empty' 2>/dev/null)"
+        [[ -z "$file_path" ]] && exit 0
+        if _is_under_prod "$file_path"; then
+            _block "$_CANON_PATH"
+        fi
+        ;;
+    Bash)
+        command="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+        [[ -z "$command" ]] && exit 0
+        # bash-decomposer lives in the system repo's own scripts/ dir, a
+        # sibling of every colony repo under ~/source/colony/ — same
+        # convention 10-cross-repo-guard already relies on.
+        SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+        REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd -P 2>/dev/null || pwd)}"
+        decomposer="$(cd "$REPO_ROOT/../system/scripts" 2>/dev/null && pwd)/bash-decomposer"
+        [[ -f "$decomposer" ]] || exit 0
+        while IFS= read -r p; do
+            [[ -z "$p" ]] && continue
+            if _is_under_prod "$p"; then
+                _block "$_CANON_PATH"
+            fi
+        done < <(printf '%s\n' "$command" | bash "$decomposer" 2>/dev/null || true)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+exit 0

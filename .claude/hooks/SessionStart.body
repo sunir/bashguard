@@ -1,0 +1,88 @@
+#!/bin/bash
+# Auto-generated hook dispatcher for SessionStart
+# Type: informational - Plugins run but never block operations
+# Version: unknown (2026-03-24 22:32:35 UTC)
+#
+# WHAT THIS HOOK DOES:
+#   Runs all executable plugins in SessionStart.d/ directory in priority order
+#   Plugins receive JSON input via stdin
+#   Plugin exit codes determine behavior (see Exit Codes section below)
+#
+# DO NOT EDIT - Managed by: colony hook SessionStart generate
+#
+# PLUGIN ENVIRONMENT VARIABLES:
+#   HOOK_NAME    - Name of this hook (e.g., "SessionStart")
+#   PLUGIN_NAME  - Basename of plugin file (e.g., "10-pluginname")
+#   SESSION_ID   - Session identifier (from hook common.sh)
+#   INPUT        - JSON input from Claude Code (from hook common.sh)
+#
+# EXIT CODES:
+#   0 - Success (plugin ran without issues)
+#   1 - Error (logged to stderr, execution continues)
+#   2 - Block operation (behavior depends on hook type)
+
+# _source <path> <what breaks without it> — FAIL CLOSED, not open. A missing
+# library must be loud and block, not let `source` fail silently and the
+# next dependent call get treated as an ordinary decision (the exact blast
+# radius a wiped lib/ has — 2026-07-08 disaster). Defined identically at the
+# top of every dispatcher (Stop, PreToolUse, UserPromptSubmit, SessionStart,
+# SessionEnd, PreCompact) — has to be duplicated, since it's what loads
+# lib/common.sh itself, before anything shared can exist to call.
+_source() {
+    local path="$1" consequence="$2"
+    if [[ ! -f "$path" ]]; then
+        echo "FATAL: hook library missing: $path" >&2
+        echo "$consequence — blocking rather than silently allowing it." >&2
+        exit 2
+    fi
+    source "$path"
+}
+
+# Load common boilerplate: sets up PATH, INPUT, SESSION_ID
+_source "$(dirname "$0")/lib/common.sh" \
+    "SCRIPT_DIR/REPO_ROOT/guards cannot be established without it"
+setup_hook_env
+[[ "${SKIP_GUARDS:-}" == "1" ]] || check_hook_guards >/dev/null || exit 0  # message discarded -- this dispatcher just allows the stop
+
+HOOK_DIR="${HOOK_DIR:-$SCRIPT_DIR/SessionStart.d}"
+[[ ! -d "$HOOK_DIR" ]] && exit 0
+
+# Story: REAPER-DISPATCHER-INTEGRATION (gates PRD, %170) -- default grace
+# period (setup work, not a cleanup/teardown hook). Empty REAPER_CMD
+# (reaper unavailable) is fail-open: plugins run exactly as before.
+reaper_cmd_for 5000
+
+_run_plugin() {
+    local plugin="$1"
+    [[ "$(basename "$plugin")" == .* ]] && return  # Skip dotfiles
+    [[ -f "$plugin" ]] || return
+
+    export HOOK_NAME="SessionStart"
+    export PLUGIN_NAME="$(basename "$plugin")"
+
+    # .md files: cat to stderr as static instructions (not executed)
+    if [[ "$plugin" == *.md ]]; then
+        cat "$plugin" >&2
+        return
+    fi
+
+    [[ -x "$plugin" ]] || return
+
+    export HOOK_PLUGIN_EFFECT="$(mktemp)"
+
+    OUTPUT=$(echo "$INPUT" | "${REAPER_CMD[@]+"${REAPER_CMD[@]}"}" "$plugin" 2>&1)
+    EXIT_CODE=$?
+
+
+    log_plugin_run "SessionStart" "$PLUGIN_NAME" "$EXIT_CODE" "${#OUTPUT}" "merged" "$HOOK_PLUGIN_EFFECT"
+
+    rm -f "$HOOK_PLUGIN_EFFECT"; unset HOOK_PLUGIN_EFFECT
+    [[ -n "$OUTPUT" ]] && echo "$OUTPUT" >&2
+}
+
+# system/ runs first (policy), then plugin/ (colony plugins), then local/ (user scripts)
+for plugin in "$HOOK_DIR/system"/*; do _run_plugin "$plugin"; done
+for plugin in "$HOOK_DIR/plugin"/*; do _run_plugin "$plugin"; done
+for plugin in "$HOOK_DIR/local"/*; do _run_plugin "$plugin"; done
+
+exit 0

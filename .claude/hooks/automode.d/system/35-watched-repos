@@ -1,0 +1,122 @@
+#!/bin/bash
+# Plugin: automode.d/35-watched-repos
+# Story: COLONY-GIT-WATCH
+#
+# Watches OTHER repos' git state (orphan branches, dirty diffs, open PRs)
+# for repos this agent is responsible for monitoring but does not run its
+# own session in -- e.g. sysop watching ../system, its own domain but a
+# separate git working tree. Mirrors 30-gitorphans' own contract exactly
+# (precheck-then-watch, dedup via signature file), generalized across N
+# configured paths instead of just cwd.
+#
+# CONFIG: .automode/git-watch.json in THIS repo -- {"watched": ["/abs/path", ...]}.
+# Written by `colony git watch <path>` (cli's command; this plugin only reads).
+#
+# PER-WATCHED-REPO IGNORE: <watched-path>/.automode/gitorphans-ignore.json --
+# {"ignored": [{"branch": "name", ...}]}. Written by
+# `colony git orphan ignore <branch>` (cli's command, run in the watched
+# repo) -- that command is also responsible for creating the deferred todo
+# tracking the ignored branch; this plugin only skips what's listed.
+#
+# CONTRACT (automode.d watcher plugin)
+# - stdin: none  args: none
+# - stdout: one line when triggered -> becomes the wakeup reason
+# - exit 0 when done; may loop internally for persistent watching
+# - Effect: any output causes allow-stop (Claude wakes and works)
+
+_WATCH_FILE=".automode/git-watch.json"
+[ -f "$_WATCH_FILE" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+command -v gitorphans >/dev/null 2>&1 || exit 0
+command -v files-changed >/dev/null 2>&1 || exit 0
+
+_SIG_FILE=".automode/35-watched-repos-sig"
+
+_watched_paths() {
+    jq -r '.watched[]? // empty' "$_WATCH_FILE" 2>/dev/null
+}
+
+# _check_one_repo <path> -- one line summary if it needs attention, else nothing.
+_check_one_repo() {
+    local path="$1"
+    [ -d "$path/.git" ] || return 1
+
+    local ignore_file="$path/.automode/gitorphans-ignore.json"
+    local ignored=""
+    [ -f "$ignore_file" ] && ignored="$(jq -r '.ignored[]?.branch // empty' "$ignore_file" 2>/dev/null)"
+
+    local raw
+    raw="$(cd "$path" && gitorphans 2>/dev/null | grep "^  [^ ]" 2>/dev/null)"
+    if [ -n "$raw" ] && [ -n "$ignored" ]; then
+        raw="$(printf '%s\n' "$raw" | while IFS= read -r line; do
+            local branch
+            branch="$(printf '%s' "$line" | awk '{print $1}')"
+            printf '%s\n' "$ignored" | grep -qxF "$branch" || printf '%s\n' "$line"
+        done)"
+    fi
+
+    local dirty
+    dirty="$(cd "$path" && git status --porcelain 2>/dev/null)"
+
+    local open_prs=""
+    if command -v gh >/dev/null 2>&1; then
+        open_prs="$(cd "$path" && gh pr list --state open --json number 2>/dev/null | jq 'length' 2>/dev/null)"
+    fi
+
+    local msg=""
+    if [ -n "$raw" ]; then
+        local count
+        count="$(printf '%s\n' "$raw" | grep -c '^')"
+        msg="$count unmerged branch$([ "$count" -gt 1 ] && echo "es")"
+    fi
+    if [ -n "$dirty" ]; then
+        msg="${msg}${msg:+, }uncommitted changes"
+    fi
+    if [ -n "$open_prs" ] && [ "$open_prs" != "0" ] && [ "$open_prs" != "null" ]; then
+        msg="${msg}${msg:+, }$open_prs open PR$([ "$open_prs" != "1" ] && echo "s")"
+    fi
+
+    [ -n "$msg" ] || return 1
+    echo "$path: $msg"
+    return 0
+}
+
+_check_all_watched() {
+    local suppress_repeat="${1:-0}"
+    local combined="" p one
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        one="$(_check_one_repo "$p")" && combined="${combined}${combined:+$'\n'}${one}"
+    done < <(_watched_paths)
+
+    [ -n "$combined" ] || return 1
+
+    if [ "$suppress_repeat" -eq 1 ]; then
+        local sig prev_sig
+        sig="$(printf '%s' "$combined" | shasum 2>/dev/null | cut -c1-8)"
+        prev_sig="$(cat "$_SIG_FILE" 2>/dev/null || true)"
+        if [ -n "$sig" ] && [ "$sig" = "$prev_sig" ]; then
+            return 1  # same watched-repo state already reported last cycle — suppress
+        fi
+        [ -n "$sig" ] && [ -d "$(dirname "$_SIG_FILE")" ] && \
+            printf '%s' "$sig" > "$_SIG_FILE" 2>/dev/null
+    fi
+
+    printf '%s\n' "$combined"
+    echo "Watched repo(s) need attention. Run Bash(gitorphans) / Bash(gh pr list) / Bash(git status) in the listed path(s)."
+    exit 0
+}
+
+_check_all_watched 1
+
+_watch_refs=()
+while IFS= read -r p; do
+    [ -d "$p/.git/refs/heads" ] && _watch_refs+=("$p/.git/refs/heads")
+done < <(_watched_paths)
+[ "${#_watch_refs[@]}" -gt 0 ] || exit 0
+
+while true; do
+    files-changed "${_watch_refs[@]}" >/dev/null || exit 0
+    rm -f "$_SIG_FILE" 2>/dev/null
+    _check_all_watched || continue
+done

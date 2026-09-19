@@ -1,0 +1,221 @@
+#!/bin/bash
+# Plugin: evidence-gate (Stop)
+# Story: VALIDATION-GATES
+#
+# PURPOSE: Prevent agents from self-certifying todo completion without an artifact.
+#   If a `todo N done` call appears in the current agent turn with no evidence
+#   (commit hash, test output, or explicit skip note), block the stop.
+#
+# PROTOCOL: next_turn JSON on stdout continues the thread. exit 0 permits stop.
+# FAIL-OPEN: missing transcript, parse errors, ambiguous state → exit 0.
+
+INPUT="$(cat)"
+
+TRANSCRIPT="$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('transcript_path',''))" 2>/dev/null)"
+SESSION_ID="$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)"
+
+# Derive fallback transcript path when not provided or not valid
+if [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ]; then
+    if [ -n "$SESSION_ID" ]; then
+        _escaped_cwd="$(pwd | sed 's|[/_]|-|g')"
+        TRANSCRIPT="$HOME/.claude/projects/${_escaped_cwd}/${SESSION_ID}.jsonl"
+    fi
+fi
+
+[ -f "$TRANSCRIPT" ] || exit 0
+
+python3 - "$TRANSCRIPT" <<'PYEOF'
+import sys, json, re
+
+transcript_path = sys.argv[1]
+
+TODO_DONE_RE = re.compile(r'todo\s+(%?\w+|\d+)\s+done')
+# Extract the done-argument text: todo %N done "some evidence text"
+TODO_DONE_ARG_RE = re.compile(r'todo\s+(?:%?\w+|\d+)\s+done\s+["\']([^"\']+)["\']')
+COMMIT_RE = re.compile(
+    r'\[(?:main|master|[\w/.\-]+)\s+[0-9a-f]{7,}\]'  # git: [branch abc1234]
+    r'|commit[:\-\s]+[0-9a-f]{7,}\b'                  # explicit: commit-abc1234, commit: abc1234
+)
+# Bare hex hash (7–40 chars) — only checked inside the done-argument text, not globally,
+# to avoid false matches on UUIDs, color values, etc. elsewhere in the turn.
+BARE_HASH_RE = re.compile(r'\b[0-9a-f]{7,40}\b')
+TEST_RE = re.compile(r'passed|PASSED|tests? run|pytest|npm test|cargo test')
+SKIP_FLAG = '--skip-evidence'
+SKIP_NOTE_RE = re.compile(r"todo\s+\S+\s+note\s+['\"]?skip-evidence:", re.IGNORECASE)
+
+_COMPACTION_PREFIX = 'This session is being continued from a previous conversation'
+_STOP_HOOK_PREFIX = 'Stop hook feedback:'
+_NOTIFICATION_PREFIXES = ('<task-notification>', '<system-reminder>')
+
+def is_genuine_user(msg):
+    if msg.get('type') == 'queue-operation':
+        op = msg.get('operation', '')
+        if op == 'enqueue':
+            content = msg.get('content', '')
+            if isinstance(content, str) and content.startswith(_NOTIFICATION_PREFIXES):
+                return False
+            return True
+        return False
+
+    if msg.get('type') != 'user':
+        return False
+
+    message_data = msg.get('message', {})
+    content = message_data.get('content', '')
+
+    if isinstance(content, list):
+        if content and all(
+            isinstance(b, dict) and b.get('type') == 'tool_result'
+            for b in content
+        ):
+            return False
+        return True
+
+    if isinstance(content, str):
+        if content.startswith(_COMPACTION_PREFIX):
+            return False
+        if content.startswith(_STOP_HOOK_PREFIX):
+            return False
+        if content.startswith(_NOTIFICATION_PREFIXES):
+            return False
+        return True
+
+    return False
+
+def extract_bash_command(entry):
+    message = entry.get('message', {})
+    content = message.get('content', [])
+    if not isinstance(content, list):
+        return []
+    commands = []
+    for block in content:
+        if isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'Bash':
+            inp = block.get('input', {})
+            cmd = inp.get('command', '')
+            if cmd:
+                commands.append(cmd)
+    return commands
+
+def extract_tool_results(entry):
+    message = entry.get('message', {})
+    content = message.get('content', [])
+    if not isinstance(content, list):
+        return []
+    results = []
+    for block in content:
+        if isinstance(block, dict) and block.get('type') == 'tool_result':
+            rc = block.get('content', '')
+            if isinstance(rc, str):
+                results.append(rc)
+            elif isinstance(rc, list):
+                for part in rc:
+                    if isinstance(part, dict) and part.get('type') == 'text':
+                        results.append(part.get('text', ''))
+    return results
+
+try:
+    entries = []
+    with open(transcript_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    # Story: EVIDENCE-GATE-TURN-BOUNDARY (BUG-008)
+    # Find boundary by scanning up to 500 entries backwards for the last genuine user
+    # message. Do NOT cap entries before finding boundary — long turns (>200 tool calls)
+    # would push the user boundary outside a 200-entry cap, causing fail-open (no check).
+    scan_limit = max(0, len(entries) - 500)
+    boundary = -1
+    for i in range(len(entries) - 1, scan_limit - 1, -1):
+        if is_genuine_user(entries[i]):
+            boundary = i
+            break
+
+    if boundary == -1:
+        # No user boundary found — cannot determine current turn
+        sys.exit(0)
+
+    # Current turn = all entries after the boundary (naturally bounded to one turn)
+    current_turn = entries[boundary + 1:]
+
+    # Collect bash commands and tool results from the current turn
+    bash_commands = []
+    tool_results = []
+    for entry in current_turn:
+        if entry.get('type') == 'assistant':
+            bash_commands.extend(extract_bash_command(entry))
+        elif entry.get('type') == 'user':
+            tool_results.extend(extract_tool_results(entry))
+
+    # Find todo done calls
+    done_ids = []
+    for cmd in bash_commands:
+        for m in TODO_DONE_RE.finditer(cmd):
+            done_ids.append(m.group(1))
+
+    if not done_ids:
+        sys.exit(0)
+
+    # Check for evidence anywhere in the turn
+    all_text = '\n'.join(bash_commands + tool_results)
+
+    has_commit = bool(COMMIT_RE.search(all_text))
+    # Also check if any done-argument text contains a bare commit hash.
+    # Agents often write: todo %N done "abc1234 fixed the thing"
+    # We only scan the done-arg string (not all_text) to avoid matching
+    # UUIDs, color values, or other incidental hex elsewhere in the turn.
+    if not has_commit:
+        for cmd in bash_commands:
+            for m in TODO_DONE_ARG_RE.finditer(cmd):
+                if BARE_HASH_RE.search(m.group(1)):
+                    has_commit = True
+                    break
+            if has_commit:
+                break
+    has_test = bool(TEST_RE.search(all_text))
+    has_skip_flag = SKIP_FLAG in all_text
+    has_skip_note = bool(SKIP_NOTE_RE.search(all_text))
+
+    if has_commit or has_test or has_skip_flag or has_skip_note:
+        sys.exit(0)
+
+    # No evidence — report which IDs are unvalidated
+    unique_ids = list(dict.fromkeys(done_ids))
+    id_list = ', '.join(unique_ids)
+    # Check if todo done ran and succeeded this turn (item is now archived).
+    # If so, `todo note` won't work retroactively — the right fix is to commit
+    # and the gate will pass on the next turn (COMMIT_RE matches the log output).
+    done_ran = any('done' in r.lower() and 'todo' in r.lower() for r in tool_results)
+    body = "\n".join([
+        f"[validation-gate] Todo(s) marked done without evidence: {id_list}",
+        "Required: a commit hash in the done-arg, test output, or explicit skip.",
+        "CORRECT PATTERN: Bash(git add <files-you-changed> && git commit -m '...') THEN todo %N done \"<commithash> <description>\" — never git add -A, it stages deletions anywhere in the tree",
+        "TO SKIP: todo %N done --skip-evidence  (or add note 'skip-evidence: <reason>' first)",
+    ])
+    print(json.dumps({
+        "source": "55-evidence-gate",
+        "status": "ok",
+        "next_turn": "continue",
+        "messages": [{
+            "id": "todo_done_without_evidence",
+            "severity": "blocker",
+            "title": "Todo completion needs evidence",
+            "body": body,
+            "actions": [
+                "Bash(git status && git log --oneline -1)",
+                "Bash(todo N note 'skip-evidence: <reason>')",
+            ],
+        }],
+    }))
+    sys.exit(0)
+
+except Exception:
+    sys.exit(0)
+PYEOF
+
+exit $?

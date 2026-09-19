@@ -1,0 +1,45 @@
+#!/bin/bash
+# Plugin: session-end (SessionEnd)
+# Story: turn-log-entries
+#
+# WHY: Writes a log entry when the session ends so we can distinguish a
+#      clean "stop then session ended" from a killed/crashed session.
+#      Without this, EOF is the only signal and you can't tell the difference.
+#      A turn with no turn_end before session_end was interrupted or killed.
+#
+# EXIT: Always 0. Informational only, never blocks session end.
+
+INPUT="${INPUT:-$(cat)}"
+
+TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+
+if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
+    SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    [[ -z "$SESSION_ID" ]] && exit 0
+    CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+    [[ -z "$CWD" ]] && CWD="$PWD"
+    ESCAPED_CWD=$(printf '%s' "$CWD" | sed 's|/|-|g; s|_|-|g')
+    TRANSCRIPT_PATH="${HOME:-$(eval echo ~claude)}/.claude/projects/${ESCAPED_CWD}/${SESSION_ID}.jsonl"
+fi
+
+[[ -f "$TRANSCRIPT_PATH" ]] || exit 0
+
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+
+python3 - "$TRANSCRIPT_PATH" "$SESSION_ID" 2>/dev/null <<'PYEOF'
+import json, sys, uuid
+from datetime import datetime, timezone
+path, session_id = sys.argv[1], sys.argv[2]
+entry = {
+    "type": "log",
+    "uuid": str(uuid.uuid4()),
+    "sessionId": session_id,
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "text": "session_end",
+    "data": {"event": "session_end"},
+}
+with open(path, 'a') as f:
+    f.write(json.dumps(entry) + '\n')
+PYEOF
+
+exit 0

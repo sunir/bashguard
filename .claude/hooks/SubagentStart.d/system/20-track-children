@@ -1,0 +1,62 @@
+#!/bin/bash
+# Plugin: track-children (SubagentStart)
+# Appends this subagent to children: [...] in .colony so the parent session
+# can see what children are actively running.
+#
+# Session guard: the session_id in SubagentStart is the PARENT session.
+# If it doesn't match .colony we're being called for a foreign session — skip.
+
+INPUT=$(cat)
+command -v jq >/dev/null 2>&1 || exit 0
+[[ -f .colony ]] || exit 0
+
+AGENT_ID="$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null)"
+AGENT_TYPE="$(printf '%s' "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null)"
+[[ -n "$AGENT_ID" ]] || exit 0
+
+SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+COLONY_SID="$(grep '^session_id:' .colony 2>/dev/null | awk '{print $2}')"
+[[ -n "$COLONY_SID" && -n "$SESSION_ID" && "$SESSION_ID" != "$COLONY_SID" ]] && exit 0
+
+COLONY_AGENT_ID="$AGENT_ID" \
+COLONY_AGENT_TYPE="$AGENT_TYPE" \
+python3 - .colony <<'PYEOF'
+import json, os, re, sys
+
+colony_path = sys.argv[1]
+agent_id   = os.environ.get("COLONY_AGENT_ID", "")
+agent_type = os.environ.get("COLONY_AGENT_TYPE", "")
+
+if not agent_id:
+    sys.exit(0)
+
+try:
+    with open(colony_path) as f:
+        content = f.read()
+except OSError:
+    sys.exit(0)
+
+m = re.search(r'^children:\s*(.+)$', content, re.MULTILINE)
+if m:
+    try:
+        children = json.loads(m.group(1))
+    except (json.JSONDecodeError, ValueError):
+        children = []
+else:
+    children = []
+
+# Dedupe: remove any stale entry with same id
+children = [c for c in children if c.get("id") != agent_id]
+children.append({"type": "subagent", "id": agent_id, "agent_type": agent_type})
+
+new_line = "children: " + json.dumps(children, separators=(",", ":"))
+if m:
+    content = re.sub(r'^children:.*$', new_line, content, flags=re.MULTILINE)
+else:
+    content = content.rstrip('\n') + '\n' + new_line + '\n'
+
+with open(colony_path, 'w') as f:
+    f.write(content)
+PYEOF
+
+exit 0

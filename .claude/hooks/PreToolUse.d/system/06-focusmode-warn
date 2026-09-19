@@ -1,0 +1,207 @@
+#!/bin/bash
+# Plugin: focusmode-warn (PreToolUse)
+# Story: focusmode-fsm
+#
+# PURPOSE: Emit workflow state warnings when Claude takes actions out of sequence.
+#   Reads allowed tools and Bash patterns from lib/tool_map.json.
+#
+# PROTOCOL: BLOCKING. Violations exit 2 + stdout reason (shown to Claude).
+#   Allowed actions exit 0.
+# FAIL-OPEN: Missing .focusmode, missing jq, missing tool_map.json → exit 0.
+
+FOCUSMODE_FILE="${FOCUSMODE_FILE:-.focusmode}"
+FOCUSMODE_SEARCH_DONE="${FOCUSMODE_SEARCH_DONE:-.focusmode-search-done}"
+
+# Locate tool_map.json relative to this script (hooks/ → lib/).
+# Resolve symlinks so this works when installed as a symlink in ~/.claude/hooks/.
+_self="$0"
+if command -v realpath >/dev/null 2>&1; then
+    _self="$(realpath "$0" 2>/dev/null || echo "$0")"
+elif command -v readlink >/dev/null 2>&1; then
+    _self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+fi
+SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
+TOOL_MAP="${TOOL_MAP:-$SCRIPT_DIR/../../lib/tool_map.json}"
+
+get_state() {
+    if [[ ! -f "$FOCUSMODE_FILE" ]] || [[ ! -s "$FOCUSMODE_FILE" ]]; then
+        echo "IDLE"
+    else
+        local raw
+        raw="$(cat "$FOCUSMODE_FILE")"
+        # Parse STATE:PROFILE format — strip profile suffix. Legacy files without colon work unchanged.
+        echo "${raw%%:*}"
+    fi
+}
+
+STATE="$(get_state)"
+
+# IDLE = focusmode off → no warnings
+[[ "$STATE" == "IDLE" ]] && exit 0
+
+# Fail-open: require jq and tool_map
+if ! command -v jq >/dev/null 2>&1; then exit 0; fi
+if [[ ! -f "$TOOL_MAP" ]]; then exit 0; fi
+
+# Parse hook input
+INPUT=$(cat)
+TOOL_NAME="$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)"
+[[ -z "$TOOL_NAME" ]] && exit 0
+
+# Extract file path (Write/Edit/MultiEdit) and bash command
+FILE_PATH="$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
+BASH_CMD="$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+
+block() {
+    local msg="$1"
+    echo "[FOCUSMODE:$STATE BLOCKED] $msg"
+    echo "Only allowed actions can proceed in $STATE state."
+    echo "Run 'focusmode next' when ready to advance."
+    echo "Stuck? Run: focusmode escape \"<reason>\" to exit immediately."
+    exit 2
+}
+
+# ── Universal bypass: focusmode commands always allowed ───────────────────
+# focusmode off/escape is the escape hatch — never warn on it regardless of state.
+if [[ "$TOOL_NAME" == "Bash" ]] && [[ "$BASH_CMD" =~ ^focusmode[[:space:]] ]] || [[ "$BASH_CMD" == "focusmode" ]]; then
+    exit 0
+fi
+
+# ── Universal bypass: read-only tools always allowed in any state ─────────
+# Read/Glob/Grep/LSP never modify files — no reason to restrict them.
+# ToolSearch loads deferred tool schemas (no side effects) — without this, an
+# agent whose Task tools aren't loaded yet can't load them in states that only
+# allow Task tools (e.g. TAKE, COMPLETE), a hard deadlock. Story: focusmode-take-toolsearch-deadlock (BUG-008)
+case "$TOOL_NAME" in
+    Read|Glob|Grep|LSP|ToolSearch) exit 0 ;;
+esac
+
+# ── Tool allowance check ───────────────────────────────────────────────────
+
+allowed_tools="$(jq -r --arg s "$STATE" '.[$s].allowed_tools // "*"' "$TOOL_MAP" 2>/dev/null)"
+
+tool_is_allowed() {
+    # "*" means all tools allowed
+    if [[ "$allowed_tools" == '"*"' ]] || [[ "$allowed_tools" == "*" ]]; then
+        return 0
+    fi
+    # Check if tool_name is in the allowed array
+    echo "$INPUT" | jq -e --arg t "$TOOL_NAME" --arg s "$STATE" \
+        'null | . as $_ | ($s | . as $state | input) | .[$state].allowed_tools |
+         if . == "*" then true
+         elif type == "array" then index($t) != null
+         else false end' \
+        >/dev/null 2>&1 && return 0
+
+    # Simpler: direct jq check against tool_map
+    jq -e --arg t "$TOOL_NAME" --arg s "$STATE" \
+        '.[$s].allowed_tools | if . == "*" then true elif type == "array" then index($t) != null else false end' \
+        "$TOOL_MAP" >/dev/null 2>&1
+}
+
+# ── File path allowance check ──────────────────────────────────────────────
+
+path_is_allowed() {
+    local path="$1"
+    [[ -z "$path" ]] && return 0  # No path = not a file write, skip
+
+    local patterns
+    patterns="$(jq -r --arg s "$STATE" '.[$s].allowed_file_paths // [] | .[]' "$TOOL_MAP" 2>/dev/null)"
+    [[ -z "$patterns" ]] && return 0  # No path restrictions
+
+    while IFS= read -r pattern; do
+        if [[ "$path" == *"$pattern"* ]]; then
+            return 0
+        fi
+    done <<< "$patterns"
+    return 1
+}
+
+# ── Bash command allowance check ───────────────────────────────────────────
+
+bash_is_allowed() {
+    local cmd="$1"
+    [[ -z "$cmd" ]] && return 0
+
+    local patterns
+    patterns="$(jq -r --arg s "$STATE" '.[$s].allowed_bash_patterns // [".*"] | .[]' "$TOOL_MAP" 2>/dev/null)"
+
+    while IFS= read -r pattern; do
+        if [[ "$cmd" =~ $pattern ]]; then
+            return 0
+        fi
+    done <<< "$patterns"
+    return 1
+}
+
+# ── Warn message lookup ────────────────────────────────────────────────────
+
+get_warn_msg() {
+    local key="$1"
+    jq -r --arg s "$STATE" --arg k "$key" '.[$s].warn_on[$k] // empty' "$TOOL_MAP" 2>/dev/null
+}
+
+# ── SEARCH state: write sentinel when rag search is detected ──────────────
+# When in SEARCH state and a Bash call contains 'rag' and 'search', mark done.
+# This allows focusmode next to advance past SEARCH without blocking.
+if [[ "$STATE" == "SEARCH" ]] && [[ "$TOOL_NAME" == "Bash" ]] && \
+   [[ "$BASH_CMD" =~ rag ]] && [[ "$BASH_CMD" =~ search ]]; then
+    touch "$FOCUSMODE_SEARCH_DONE"
+fi
+
+# ── Main logic ─────────────────────────────────────────────────────────────
+
+is_write_edit() {
+    case "$TOOL_NAME" in
+        Write|Edit|MultiEdit) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Check 1: Is the tool itself allowed in this state?
+if ! tool_is_allowed; then
+    if is_write_edit; then
+        msg="$(get_warn_msg "write_edit_tool")"
+    else
+        msg="$(get_warn_msg "non_task_tool")"
+    fi
+    [[ -z "$msg" ]] && msg="$TOOL_NAME not expected in $STATE state"
+    block "$msg"
+fi
+
+# Check 2: For Write/Edit/MultiEdit — is the file path in an allowed directory?
+if is_write_edit && [[ -n "$FILE_PATH" ]]; then
+    if ! path_is_allowed "$FILE_PATH"; then
+        if [[ "$STATE" == "TEST" ]]; then
+            msg="$(get_warn_msg "write_outside_tests")"
+        elif [[ "$STATE" == "DOC" ]]; then
+            msg="$(get_warn_msg "write_outside_docs")"
+        fi
+        [[ -z "$msg" ]] && msg="$TOOL_NAME to '$FILE_PATH' not allowed in $STATE state"
+        block "$msg"
+    fi
+fi
+
+# Check 3: For Bash — is the command pattern allowed?
+if [[ "$TOOL_NAME" == "Bash" ]] && [[ -n "$BASH_CMD" ]]; then
+    if ! bash_is_allowed "$BASH_CMD"; then
+        if [[ "$STATE" == "BRANCH" ]]; then
+            msg="$(get_warn_msg "bash_not_git_branch")"
+        elif [[ "$STATE" == "COMMIT" ]]; then
+            msg="$(get_warn_msg "bash_not_git_commit")"
+        elif [[ "$STATE" == "MERGE" ]]; then
+            msg="$(get_warn_msg "bash_not_git_merge")"
+        elif [[ "$STATE" == "TEST" ]]; then
+            msg="$(get_warn_msg "bash_not_test_runner")"
+        elif [[ "$STATE" == "DOC" ]]; then
+            msg="$(get_warn_msg "bash_not_doc")"
+        else
+            msg="$(get_warn_msg "bash_not_allowed")"
+        fi
+        [[ -z "$msg" ]] && msg="Bash '$BASH_CMD' not expected in $STATE state"
+        block "$msg"
+    fi
+fi
+
+# No violation — exit cleanly
+exit 0

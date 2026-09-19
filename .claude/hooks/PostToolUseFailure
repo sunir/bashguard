@@ -1,0 +1,67 @@
+#!/bin/bash
+# Auto-generated hook dispatcher for PostToolUseFailure
+# Type: informational - Plugins run but never block operations
+# Version: unknown (2026-08-12 15:50:49 UTC)
+#
+# WHAT THIS HOOK DOES:
+#   Runs all executable plugins in PostToolUseFailure.d/ directory in priority order
+#   Plugins receive JSON input via stdin
+#   Plugin exit codes determine behavior (see Exit Codes section below)
+#
+# DO NOT EDIT - Managed by: colony hook PostToolUseFailure generate
+#
+# PLUGIN ENVIRONMENT VARIABLES:
+#   HOOK_NAME    - Name of this hook (e.g., "PostToolUseFailure")
+#   PLUGIN_NAME  - Basename of plugin file (e.g., "10-pluginname")
+#   SESSION_ID   - Session identifier (from hook common.sh)
+#   INPUT        - JSON input from Claude Code (from hook common.sh)
+#
+# EXIT CODES:
+#   0 - Success (plugin ran without issues)
+#   1 - Error (logged to stderr, execution continues)
+#   2 - Block operation (behavior depends on hook type)
+
+# Fast path: skip expensive setup if no plugins exist
+_HOOK_DIR_FAST="$(dirname "$0")/PostToolUseFailure.d"
+_has_plugins() {
+    local d="$1"
+    [[ -d "$d/system" ]] && compgen -G "$d/system/[0-9]*" >/dev/null 2>&1 && return 0
+    [[ -d "$d/local" ]]  && compgen -G "$d/local/[0-9]*"  >/dev/null 2>&1 && return 0
+    return 1
+}
+_has_plugins "$_HOOK_DIR_FAST" || exit 0
+
+# Load common boilerplate: sets up PATH, INPUT, SESSION_ID
+source "$(dirname "$0")/lib/common.sh"
+setup_hook_env
+
+HOOK_DIR="$SCRIPT_DIR/PostToolUseFailure.d"
+[[ ! -d "$HOOK_DIR" ]] && exit 0
+
+_run_plugin() {
+    local plugin="$1"
+    [[ "$(basename "$plugin")" == .* ]] && return  # Skip dotfiles
+    [[ -f "$plugin" ]] || return
+
+    export HOOK_NAME="PostToolUseFailure"
+    export PLUGIN_NAME="$(basename "$plugin")"
+
+    # .md files: cat to stderr as static instructions (not executed)
+    if [[ "$plugin" == *.md ]]; then
+        cat "$plugin" >&2
+        return
+    fi
+
+    [[ -x "$plugin" ]] || return
+
+    OUTPUT=$(echo "$INPUT" | "$plugin" 2>&1)
+    EXIT_CODE=$?
+
+    [[ -n "$OUTPUT" ]] && echo "$OUTPUT" >&2
+}
+
+# system/ runs first (policy), then local/ (user scripts)
+for plugin in "$HOOK_DIR/system"/*; do _run_plugin "$plugin"; done
+for plugin in "$HOOK_DIR/local"/*; do _run_plugin "$plugin"; done
+
+exit 0

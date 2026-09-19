@@ -1,0 +1,54 @@
+#!/bin/bash
+# Plugin: transcript-sync (SessionEnd)
+# Story: auto-memorize-on-session-end
+#
+# WHY: At session end, the conversation is complete. This is the natural moment
+#      to back up the transcript and consolidate memories — before context is
+#      lost and before the next session starts cold. Without this, memory
+#      consolidation only happens manually or on compaction restart.
+#
+# WHEN: Every SessionEnd, for any project that has a `transcript` CLI available.
+#
+# WHAT IT DOES:
+#   1. Determines the project root from the session's cwd
+#   2. Runs `transcript backup` to ensure the session is saved (fast, always safe)
+#   3. If TRANSCRIPT_AUTO_MEMORIZE=1 is set, also runs `transcript sync`
+#      which includes LLM-based memory consolidation (slower, costs tokens)
+#
+# EXIT: Always 0. This is async maintenance, not a blocker.
+
+set -euo pipefail
+
+INPUT="${INPUT:-$(cat)}"
+
+# Extract cwd from hook JSON — this is the project directory
+CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // ""')"
+
+# Fallback: derive from transcript_path if cwd not available
+if [ -z "$CWD" ]; then
+    TRANSCRIPT_PATH="$(printf '%s' "$INPUT" | jq -r '.transcript_path // ""')"
+    if [ -n "$TRANSCRIPT_PATH" ]; then
+        # transcript_path is typically ~/.claude/projects/<slug>/session.jsonl
+        # The actual project cwd isn't reliably derivable from it, so bail
+        exit 0
+    fi
+    exit 0
+fi
+
+# Guard: directory must exist
+[ -d "$CWD" ] || exit 0
+
+# Guard: transcript CLI must be available
+TRANSCRIPT_BIN="$(command -v transcript 2>/dev/null || echo "")"
+[ -n "$TRANSCRIPT_BIN" ] || exit 0
+
+# Run transcript backup in background — fast, just copies JSONL files
+# Use nohup so it survives the hook process exiting
+(cd "$CWD" && nohup transcript backup >/dev/null 2>&1 &)
+
+# Optional: full sync (backup + LLM memorize) if opted in
+if [ "${TRANSCRIPT_AUTO_MEMORIZE:-0}" = "1" ]; then
+    (cd "$CWD" && nohup transcript sync >/dev/null 2>&1 &)
+fi
+
+exit 0

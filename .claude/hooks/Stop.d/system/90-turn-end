@@ -1,0 +1,46 @@
+#!/bin/bash
+# Plugin: turn-end (Stop)
+# Story: turn-log-entries
+#
+# WHY: Writes a log entry when the agent cleanly stops so turn boundaries
+#      are computable. Runs AFTER all other Stop plugins (priority 90) so
+#      the log reflects a genuine stop, not a blocked-then-continued event.
+#      Interrupted sessions have no turn_end; that gap IS the turn boundary.
+#
+# PROTOCOL: Always exits 0 (never blocks stop). Informational only.
+
+INPUT=$(cat)
+
+TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+
+if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
+    SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    [[ -z "$SESSION_ID" ]] && exit 0
+    CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+    [[ -z "$CWD" ]] && CWD="$PWD"
+    ESCAPED_CWD=$(printf '%s' "$CWD" | sed 's|/|-|g; s|_|-|g')
+    TRANSCRIPT_PATH="${HOME:-$(eval echo ~claude)}/.claude/projects/${ESCAPED_CWD}/${SESSION_ID}.jsonl"
+fi
+
+[[ -f "$TRANSCRIPT_PATH" ]] || exit 0
+
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+STOP_HOOK_ACTIVE=$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null)
+
+python3 - "$TRANSCRIPT_PATH" "$SESSION_ID" "$STOP_HOOK_ACTIVE" 2>/dev/null <<'PYEOF'
+import json, sys, uuid
+from datetime import datetime, timezone
+path, session_id, stop_hook_active = sys.argv[1], sys.argv[2], sys.argv[3]
+entry = {
+    "type": "log",
+    "uuid": str(uuid.uuid4()),
+    "sessionId": session_id,
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "text": "turn_end",
+    "data": {"event": "turn_end", "stop_hook_active": stop_hook_active == "true"},
+}
+with open(path, 'a') as f:
+    f.write(json.dumps(entry) + '\n')
+PYEOF
+
+exit 0

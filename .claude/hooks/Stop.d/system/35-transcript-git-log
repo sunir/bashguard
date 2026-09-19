@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Plugin: transcript-git-log (Stop)
+# Story: TRANSCRIPT-GIT-LOG
+#
+# WHY: Log git commits made during a session to the active transcript so the
+#      conversation record shows what code changed. Visible via:
+#      transcript latest filter log  OR  transcript latest search git_commit
+#
+# Story: TRANSCRIPT-GIT-LOG — writes DIRECTLY to $INPUT.transcript_path (the
+# current session's own, unambiguous transcript file, already available on
+# stdin to every Stop.d plugin — same field siblings like 45-context-engine
+# and 55-evidence-gate already read) instead of routing through
+# `transcript latest log`. That command appends to whatever `transcript`'s
+# own "latest" resolution currently picks across BOTH Claude and Codex
+# harness sessions for this repo — confirmed buggy (case-mismatch in
+# transcript's project-directory matching, see
+# stories/transcript-git-log-direct-write.md for the full evidence chain)
+# and, worse, self-reinforcing: appending a fresh-timestamped log entry to
+# whatever wrong file got picked refreshes that file's mtime/last-activity
+# signal, making it win the next "latest" resolution too. Writing directly
+# to the transcript_path THIS Stop invocation was actually given sidesteps
+# the ambiguity entirely and cannot contribute to that lock-in.
+#
+# No fallback to `transcript latest log` when transcript_path is missing or
+# unreadable — skip cleanly instead. A fallback here would silently
+# reintroduce the exact bug this fix removes (every fallback is a bug).
+#
+# STATE: .automode/transcript-git-sha — last commit SHA logged to transcript.
+#        Prevents double-logging the same commit across Stop hook invocations.
+#
+# PROTOCOL: stdin: $INPUT JSON (session_id, transcript_path).
+#           stdout empty. Always exits 0.
+
+set -euo pipefail
+
+INPUT="$(cat)"
+
+command -v git >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+
+TRANSCRIPT_PATH="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+[[ -n "$TRANSCRIPT_PATH" && -f "$TRANSCRIPT_PATH" ]] || exit 0
+
+SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
+
+STATE_FILE=".automode/transcript-git-sha"
+LAST_LOGGED="$(cat "$STATE_FILE" 2>/dev/null || true)"
+CURRENT_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+
+[[ -z "$CURRENT_SHA" ]] && exit 0
+[[ "$CURRENT_SHA" == "$LAST_LOGGED" ]] && exit 0
+
+# Find commits since last logged SHA (or just the HEAD commit if none recorded).
+# %x1f (unit separator) between SHA and message avoids any ambiguity from
+# spaces/special characters in commit subjects.
+if [[ -n "$LAST_LOGGED" ]] && git rev-parse --verify "$LAST_LOGGED" >/dev/null 2>&1; then
+    COMMITS="$(git log --reverse --format="%H%x1f%s" "${LAST_LOGGED}..HEAD" 2>/dev/null || true)"
+else
+    COMMITS="$(git log -1 --format="%H%x1f%s" HEAD 2>/dev/null || true)"
+fi
+
+[[ -z "$COMMITS" ]] && exit 0
+
+REPO_NAME="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")")"
+
+while IFS=$'\x1f' read -r SHA MSG; do
+    [[ -z "$SHA" ]] && continue
+    SHORT_SHA="${SHA:0:7}"
+    python3 - "$TRANSCRIPT_PATH" "$SESSION_ID" "$SHORT_SHA" "$MSG" "$REPO_NAME" <<'PYEOF' 2>/dev/null || true
+import sys, json, uuid
+from datetime import datetime, timezone
+
+path, session_id, sha, msg, repo = sys.argv[1:6]
+entry = {
+    "type": "log",
+    "uuid": str(uuid.uuid4()),
+    "sessionId": session_id,
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "text": json.dumps({"type": "git_commit", "sha": sha, "message": msg, "repo": repo}),
+}
+with open(path, "a") as f:
+    f.write(json.dumps(entry) + "\n")
+PYEOF
+done <<< "$COMMITS"
+
+# Update state to current HEAD
+mkdir -p .automode
+printf '%s\n' "$CURRENT_SHA" > "$STATE_FILE"
+
+exit 0

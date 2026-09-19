@@ -1,0 +1,81 @@
+#!/bin/bash
+# Plugin: automode.d/20-queue-operation
+# Story: focusmode-fsm
+#
+# PURPOSE: Wake automode when the user sends a new message (queued input).
+#
+# Uses `transcript <path> wait user` (falling back to `transcript latest claude
+# wait user` when TRANSCRIPT_SESSION_FILE isn't set) which blocks until the
+# next user-role message appears in the session JSONL — more reliable than
+# inode-based files-changed watching, which breaks when the JSONL is
+# written in ways that change the file inode.
+#
+# Story: QUEUE-OPERATION-TRANSCRIPT — TRANSCRIPT_SESSION_FILE, when set and
+# pointing at an existing file, addresses the live session directly instead
+# of depending on transcript's "latest" heuristic (which was found broken
+# tonight: case-sensitive project-dir matching silently resolved to a
+# stale, unrelated session). stop_run_automode() (automode.sh) exports it
+# from INPUT.transcript_path before dispatching, the same pattern already
+# used for AUTOMODE_SENSOR_DIR. Falls back to "latest claude" when unset/missing
+# so standalone invocations (tests, manual runs) are unaffected.
+#
+# NOTE: We use 'latest claude' (not 'latest') as the fallback so that a newer
+# Codex session never hijacks this watcher. Queue-operations are always written
+# to Claude Code JSONL — never to Codex rollout files.
+#
+# Filters out tool_result messages (those are our own tool outputs, not
+# human-queued input). Only real text messages trigger a wakeup.
+#
+# CONTRACT (automode.d watcher plugin)
+# - stdin: none  args: none
+# - stdout: one line when triggered → becomes the wakeup reason
+# - exit 0 when done; may loop internally for persistent watching
+# - Effect: any output causes allow-stop (Claude wakes and works)
+
+command -v transcript >/dev/null 2>&1 || exit 0
+
+# Story: QUEUE-OPERATION-TRANSCRIPT, QUEUE-OPERATION-LATEST-CLAUDE
+# Default to 'latest claude' (not 'latest') so a newer Codex session never
+# hijacks this watcher — queue-operations are always written to Claude Code JSONL,
+# never to Codex rollout files. TRANSCRIPT_SESSION_FILE (set by automode.sh) takes
+# priority as it addresses the live session directly.
+if [[ -n "${TRANSCRIPT_SESSION_FILE:-}" && -f "${TRANSCRIPT_SESSION_FILE:-}" ]]; then
+    _transcript_args=("$TRANSCRIPT_SESSION_FILE")
+else
+    _transcript_args=(latest claude)
+fi
+
+_out="$(mktemp)"
+_pid=""
+
+_cleanup() {
+    [[ -n "$_pid" ]] && kill "$_pid" 2>/dev/null
+    rm -f "$_out"
+}
+trap _cleanup EXIT INT TERM
+
+while true; do
+    # Run transcript in background so we can kill it on EXIT/TERM.
+    # The $(...) subshell does NOT forward signals to children, so running
+    # in background with an explicit PID is the only reliable way to clean up.
+    transcript "${_transcript_args[@]}" wait user >"$_out" 2>/dev/null &
+    _pid=$!
+    wait "$_pid"
+    ec=$?
+    _pid=""
+    [[ $ec -ne 0 ]] && exit 0
+    line="$(cat "$_out")"
+    [[ -n "$line" ]] || continue
+    # Filter sentinel strings that are not real user messages.
+    # "Timeout:" means the 1-hour watch expired with no message — loop to re-watch.
+    # "No session file" means transcript can't find the JSONL — bail cleanly.
+    # "<task-notification>" entries are background agent completions — wake automode
+    # so Claude can process the result (story: AUTOMODE-BACKGROUND-AGENT-EXIT).
+    # Note: stop_has_pending_ups in the Stop automode worker still filters these out from the
+    # "skip wait early" check — only the relax watcher needs to wake here.
+    [[ "$line" == Timeout:* ]] && continue
+    [[ "$line" == "No session file to watch" ]] && exit 0
+    [[ "$line" == "<task-notification>"* ]] && printf 'Agent: %s\n' "$line" && exit 0
+    printf 'Queued: %s\n' "$line"
+    exit 0
+done

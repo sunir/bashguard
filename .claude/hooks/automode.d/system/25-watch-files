@@ -1,0 +1,94 @@
+#!/bin/bash
+# Plugin: automode.d/25-watch-files
+# Story: automode-pair-programming
+#
+# PURPOSE: Wake automode when the user edits tracked files outside the agent's
+#          session. Surfaces `git diff` so Claude can review changes and pair
+#          program — comment, continue, or ask questions.
+#
+# MECHANISM: Persistent loop using watch-paths (cross-platform: fswatch on macOS,
+#            inotifywait on Linux) to watch the repo root for file events.
+#            Excludes .git and common noise. On change, checks if any
+#            non-gitignored files changed AND git diff is non-empty before waking.
+#
+# IMPORTANT: Must be a persistent loop (not single-shot). watch-paths exits on
+#            every file event including transcript JSONL writes — a single-shot
+#            plugin exits immediately, depleting the watcher pool and causing
+#            "all watchers exited" fallthrough. Loop back if nothing actionable.
+#
+# CONTRACT (automode.d watcher plugin)
+# - stdin: none  args: none
+# - stdout: one line when triggered → becomes the wakeup reason
+# - exit 0 when done; loops internally for persistent watching
+# - Effect: any output causes allow-stop (Claude wakes and works)
+
+# Opt-in gate: only run when explicitly enabled via `automode watch files`.
+# Default is OFF to avoid interference with zork mode and reduce noise.
+[[ -f ".automode/watch-files" ]] || exit 0
+
+command -v watch-paths >/dev/null 2>&1 || exit 0
+command -v git >/dev/null 2>&1 || exit 0
+git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+
+# Only fire when there are actual working-tree changes
+_has_diff() {
+    ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null
+}
+
+_pid=""
+_out="$(mktemp)"
+
+_cleanup() {
+    [[ -n "$_pid" ]] && kill "$_pid" 2>/dev/null || true
+    rm -f "$_out"
+}
+trap _cleanup EXIT INT TERM
+
+while true; do
+    # Watch repo root, excluding .git and common noise.
+    # watch-paths exits after first batch (we loop externally for persistence)
+    watch-paths \
+        --recursive \
+        --exclude '\.git/' \
+        --exclude '\.git$' \
+        --exclude '__pycache__' \
+        --exclude '\.pyc$' \
+        --exclude '\.swp$' \
+        --exclude '~$' \
+        --exclude '\.DS_Store' \
+        . >"$_out" 2>/dev/null &
+    _pid=$!
+    wait "$_pid"
+    ec=$?
+    _pid=""
+
+    # fswatch exited non-zero (interrupted or error) — bail
+    [[ $ec -ne 0 ]] && exit 0
+
+    # Filter: only care about non-gitignored files
+    changed_files=()
+    while IFS= read -r fpath; do
+        [[ -z "$fpath" ]] && continue
+        [[ "$fpath" == */.git/* || "$fpath" == .git/* ]] && continue
+        git check-ignore -q "$fpath" 2>/dev/null && continue
+        changed_files+=("$fpath")
+    done < "$_out"
+    > "$_out"  # clear for next iteration
+
+    # Nothing tracked changed — loop back to watch
+    [[ ${#changed_files[@]} -eq 0 ]] && continue
+
+    # No diff to show (e.g. file saved then reverted) — loop back
+    _has_diff || continue
+
+    # Something real changed — wake automode
+    first="${changed_files[0]}"
+    rel="$(git ls-files --full-name "$first" 2>/dev/null || basename "$first")"
+    count="${#changed_files[@]}"
+    if [[ $count -eq 1 ]]; then
+        printf 'file-changed: %s\n' "$rel"
+    else
+        printf 'file-changed: %s (+%d more)\n' "$rel" "$((count - 1))"
+    fi
+    exit 0
+done

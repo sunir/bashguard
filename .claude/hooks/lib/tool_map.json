@@ -1,0 +1,193 @@
+{
+  "_comment": "FocusMode allowed tools and Bash commands per state. Story: focusmode-fsm",
+  "_protocol": "block_on_violation: exit 2 + stdout reason. Allowed actions exit 0.",
+  "_note": "Bash patterns use POSIX ERE (bash =~ operator). Use [[:space:]] not \\s. No \\b needed.",
+
+  "IDLE": {
+    "_comment": "FocusMode off — no restrictions",
+    "allowed_tools": "*",
+    "allowed_bash_patterns": [".*"],
+    "warn_on": []
+  },
+
+  "TAKE": {
+    "_comment": "Claim a todo. Task management tools, ToolSearch (to load them), and specific bash commands.",
+    "allowed_tools": ["TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "ToolSearch", "Bash"],
+    "allowed_bash_patterns": [
+      "^todo",
+      "^focusmode"
+    ],
+    "warn_on": {
+      "non_task_tool": "Use 'todo take <id>' (Bash) or Task tools (TaskList/TaskUpdate) to claim work before writing code",
+      "bash_not_allowed": "Run 'todo avail' to find work, then 'todo <id> take' to claim it (or TaskUpdate if using harness tasks)"
+    }
+  },
+
+  "BRANCH": {
+    "_comment": "Create a git feature branch. Git branch commands only.",
+    "allowed_tools": ["Bash"],
+    "allowed_bash_patterns": [
+      "^git[[:space:]]+checkout[[:space:]]+(-b|--orphan)",
+      "^git[[:space:]]+switch[[:space:]]+(-c|--create)",
+      "^git[[:space:]]+branch",
+      "^git[[:space:]]+status",
+      "^git[[:space:]]+log",
+      "^focusmode"
+    ],
+    "warn_on": {
+      "write_edit_tool": "Create a git branch before writing files",
+      "bash_not_git_branch": "Expected: git checkout -b <branch-name>"
+    }
+  },
+
+  "SEARCH": {
+    "_comment": "Search heuristics/specs/memory before writing code. rag search required to advance.",
+    "allowed_tools": ["Bash", "Read", "Glob", "Grep"],
+    "allowed_bash_patterns": [
+      "^rag[[:space:]]",
+      "^recall[[:space:]]",
+      "^focusmode",
+      "^todo",
+      "^git[[:space:]]+(status|log|diff)"
+    ],
+    "warn_on": {
+      "write_edit_tool": "Search heuristics and memory before writing anything — run 'rag search \"<task>\"' first",
+      "bash_not_allowed": "In SEARCH state: run 'rag search \"<task description>\"' to consult the heuristics library"
+    }
+  },
+
+  "SPEC": {
+    "_comment": "Write spec/story before writing tests. Research allowed. Source/test writes blocked.",
+    "allowed_tools": ["Write", "Edit", "MultiEdit", "Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch", "TaskList", "TaskGet"],
+    "allowed_file_paths": ["specs/", "stories/", ".md"],
+    "allowed_bash_patterns": [
+      "^todo",
+      "^focusmode",
+      "^git[[:space:]]+(status|diff|log)"
+    ],
+    "warn_on": {
+      "write_outside_specs": "Write spec/story files in specs/ or stories/ before advancing — document what you're building and why",
+      "bash_not_allowed": "Expected: todo or read-only git commands in SPEC state"
+    }
+  },
+
+  "TEST": {
+    "_comment": "Write failing tests. tests/ is canonical. specs/stories allowed for updates during test writing. Source paths blocked.",
+    "allowed_tools": ["Write", "Edit", "MultiEdit", "Read", "Glob", "Grep", "Bash", "Task"],
+    "allowed_file_paths": [
+      "tests/", "specs/", "stories/"
+    ],
+    "allowed_bash_patterns": [
+      "^(uv run |python -m )?pytest",
+      "^uv run",
+      "^npm test",
+      "^yarn test",
+      "^bash tests/",
+      "^bats",
+      "^git[[:space:]]+(status|diff|log)",
+      "^focusmode",
+      "^todo"
+    ],
+    "warn_on": {
+      "write_outside_tests": "Write tests in tests/ before advancing — use tests/ as the canonical test directory",
+      "bash_not_test_runner": "Run your test suite to confirm tests fail before writing code"
+    }
+  },
+
+  "CODE": {
+    "_comment": "Make tests pass. Write anywhere allowed. No restrictions.",
+    "allowed_tools": "*",
+    "allowed_bash_patterns": [".*"],
+    "warn_on": {}
+  },
+
+  "REVIEW": {
+    "_comment": "Verify code quality: tests pass, linter clean. Read-only — no file writes.",
+    "allowed_tools": ["Bash", "Read", "Glob", "Grep"],
+    "allowed_bash_patterns": [
+      "^(uv run |python -m )?pytest",
+      "^uv run",
+      "^npm test",
+      "^yarn test",
+      "^bats",
+      "^git[[:space:]]+(status|diff|log|show)",
+      "^focusmode"
+    ],
+    "warn_on": {
+      "write_edit_tool": "REVIEW is read-only — go back to CODE state if changes are needed",
+      "bash_not_allowed": "Expected: test runner or read-only git commands in REVIEW state"
+    }
+  },
+
+  "DOC": {
+    "_comment": "Update documentation. Write only in doc directories.",
+    "allowed_tools": ["Write", "Edit", "MultiEdit", "Read", "Glob", "Grep", "Bash"],
+    "allowed_file_paths": ["docs/", "stories/", "specs/", "doc/", "README", "CHANGELOG", "CLAUDE.md", ".md"],
+    "allowed_bash_patterns": [
+      "^git[[:space:]]+(status|diff|log|add|commit)",
+      "^focusmode",
+      "^todo"
+    ],
+    "warn_on": {
+      "write_outside_docs": "Update docs/stories/specs before advancing — write to a doc directory",
+      "bash_not_doc": "Expected: git operations or doc tooling"
+    }
+  },
+
+  "AUDIT": {
+    "_comment": "Haiku agent verifies spec→test→code→doc order. Read-only git introspection.",
+    "allowed_tools": ["Bash", "Read", "Glob", "Grep"],
+    "allowed_bash_patterns": [
+      "^git[[:space:]]+(log|diff|show|status)",
+      "^focusmode-audit",
+      "^focusmode"
+    ],
+    "warn_on": {
+      "write_edit_tool": "AUDIT is read-only — no file changes during workflow audit",
+      "bash_not_allowed": "Expected: git history inspection or focusmode-audit in AUDIT state"
+    }
+  },
+
+  "COMPLETE": {
+    "_comment": "Mark todo done. Only TaskUpdate and specific bash commands.",
+    "allowed_tools": ["TaskUpdate", "TaskList", "TaskGet", "Bash"],
+    "allowed_bash_patterns": [
+      "^todo",
+      "^focusmode"
+    ],
+    "warn_on": {
+      "non_task_tool": "Mark the todo as completed with TaskUpdate before advancing",
+      "bash_not_allowed": "Use TaskUpdate to mark work complete"
+    }
+  },
+
+  "COMMIT": {
+    "_comment": "Commit changes. Git add/commit via Bash only.",
+    "allowed_tools": ["Bash", "Read", "Glob", "Grep"],
+    "allowed_bash_patterns": [
+      "^git[[:space:]]+(add|commit|diff|status|log|rm)",
+      "^git[[:space:]]+-C",
+      "^focusmode",
+      "^todo"
+    ],
+    "warn_on": {
+      "write_edit_tool": "Commit with Bash (git add + git commit) — no more file writes in COMMIT state",
+      "bash_not_git_commit": "Expected: git add <files> && git commit -m 'message'"
+    }
+  },
+
+  "MERGE": {
+    "_comment": "Merge to main, clean up branch. Git merge/checkout via Bash only.",
+    "allowed_tools": ["Bash", "Read", "Glob", "Grep"],
+    "allowed_bash_patterns": [
+      "^git[[:space:]]+(checkout|switch|merge|push|pull|branch|status|log)",
+      "^git[[:space:]]+-C",
+      "^focusmode",
+      "^todo"
+    ],
+    "warn_on": {
+      "write_edit_tool": "Merge with Bash (git checkout main + git merge) — no file writes in MERGE state",
+      "bash_not_git_merge": "Expected: git checkout main && git merge <branch> && git branch -d <branch>"
+    }
+  }
+}

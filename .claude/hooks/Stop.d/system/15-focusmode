@@ -1,0 +1,151 @@
+#!/bin/bash
+# Plugin: focusmode (Stop)
+# Story: focusmode-fsm
+#
+# PURPOSE: When focusmode is active and exit conditions aren't met,
+#   emit a next_turn continue message nudging Claude to advance.
+#   This is the "anxiety loop" — Claude can't stop until the current
+#   state is complete or focusmode is explicitly exited.
+#
+# PROTOCOL: next_turn JSON on stdout → dispatcher continues the current thread.
+#   Exit 0 = allow stop (focusmode off or exit conditions met).
+# FAIL-OPEN: Missing focusmode-probe or .focusmode → exit 0.
+
+FOCUSMODE_FILE="${FOCUSMODE_FILE:-.focusmode}"
+
+# Story: FOCUSMODE-RELAX-SENTINEL
+# Respect explicit relax — agent signalled "waiting for external input, done for now"
+if [[ -f ".automode/relax" ]]; then
+    exit 0
+fi
+
+# File absent (or empty) = focusmode just completed a cycle.
+# Loop: if todos remain, block stop and prompt for next cycle.
+# If queue is clear, allow stop (natural end).
+if [[ ! -f "$FOCUSMODE_FILE" ]] || [[ ! -s "$FOCUSMODE_FILE" ]]; then
+    if command -v todo >/dev/null 2>&1 && [[ -f .todo.json ]]; then
+        todo status >/dev/null 2>&1; _todo_ec=$?
+        # Story: TODO-WATCHER-FIRES — only exit 1 (available todos) is actionable.
+        # Exit 2 = taken-only (agent holds a card, no avail) — not actionable here.
+        if [[ "$_todo_ec" -eq 1 ]]; then
+            # Story: AUTOMODE-D-TODO-FILTER-AVAIL (2026-08-11) -- ask `todo`
+            # the precise question directly instead of parsing `todo all`'s
+            # prose. `todo filter avail` is a raw status-field match
+            # (todo_set.py's filter_avail: `t.get('status') == 'avail'`).
+            # Specs/stories/projects never satisfy that internally -- their
+            # "[avail]" label in `todo all`/`todo list` is a cosmetic
+            # file-location convention (todo --help: "their file location
+            # IS their status"), not their real stored status -- confirmed
+            # empirically: `todo filter avail` returns nothing when only
+            # specs are present, live. So non-empty output here IS
+            # precisely "genuine todo/push work available" -- FocusMode's
+            # own reason to keep looping. No type-bracket regex needed, no
+            # unanchored-substring-in-prose false positive possible either
+            # (both existed only to work around this exact imprecision --
+            # TODO-WATCHER-FIRES, FOCUSMODE-DEFERRED-LOOP, TODO-MARKER-GREP,
+            # AUTOMODE-D-TODO-SPEC-NOT-ACTIONABLE -- see git history for the
+            # full prior layered-workaround reasoning if this needs
+            # revisiting). Same fix as automode.d/10-todo and lib/stop/
+            # todo.sh (all three still agree).
+            _avail="$(todo filter avail 2>/dev/null)"
+            [[ -n "$_avail" && "$_avail" != "No todos" ]] || exit 0
+            # Todos available — keep looping
+            PROFILE="code"
+            BODY="FocusMode loop: queue has work.
+Take a todo then run: focusmode start ${PROFILE}
+To stop looping: focusmode idle"
+            jq -n --arg body "$BODY" \
+                '{
+                    source: "15-focusmode",
+                    status: "ok",
+                    next_turn: "continue",
+                    messages: [{
+                        id: "focusmode_loop",
+                        severity: "blocker",
+                        title: "FocusMode has queued work",
+                        body: $body,
+                        actions: ["Bash(todo next)", "Bash(focusmode start code)", "Bash(focusmode idle)"]
+                    }]
+                }'
+            exit 0
+        fi
+    fi
+    exit 0  # Queue clear or no todo system — allow stop
+fi
+
+# Story: FOCUSMODE-STATE-PARSE (BUG-006)
+# .focusmode format is "STATE:PROFILE" or "STATE:PROFILE:AGENT" — extract state only.
+_STATE_RAW="$(cat "$FOCUSMODE_FILE" 2>/dev/null | tr -d '[:space:]')"
+STATE="$(printf '%s' "$_STATE_RAW" | cut -d: -f1)"
+[[ -z "$STATE" || "$STATE" == "IDLE" ]] && exit 0
+
+# State descriptions for the nudge message
+case "$STATE" in
+    TAKE)     WHAT="Claim a todo: 'todo take <id>' (Bash), or TaskList → TaskUpdate (in_progress)" ;;
+    BRANCH)   WHAT="Create feature branch: git checkout -b <name>" ;;
+    TEST)     WHAT="Write failing tests and confirm they FAIL" ;;
+    CODE)     WHAT="Make tests pass: write code, run tests, confirm green" ;;
+    DOC)      WHAT="Update docs/stories/specs (write at least one .md)" ;;
+    COMPLETE) WHAT="Mark todos done: TaskUpdate (completed)" ;;
+    COMMIT)   WHAT="Commit changes: git add + git commit" ;;
+    MERGE)    WHAT="Merge to main: git checkout main && git merge <branch>" ;;
+    *)        WHAT="Check state: focusmode state" ;;
+esac
+
+# Run probe to determine readiness
+PROBE_READY=false
+PROBE_MSG=""
+
+if command -v focusmode-probe >/dev/null 2>&1; then
+    PROBE_OUT="$(focusmode-probe "$STATE" 2>/dev/null)"
+    PROBE_EC=$?
+    PROBE_MSG="$(echo "$PROBE_OUT" | tail -1)"
+
+    if [[ $PROBE_EC -eq 0 ]]; then
+        PROBE_READY=true
+    fi
+else
+    # No probe available — treat as inconclusive, still nudge
+    PROBE_MSG="focusmode-probe not available"
+fi
+
+if $PROBE_READY; then
+    # Exit conditions met — gentle nudge to advance, then allow stop
+    REASON="FOCUSMODE:$STATE — EXIT CONDITIONS MET.
+
+Probe says: $PROBE_MSG
+
+Run 'focusmode next' to advance to the next state.
+Or if you're done: 'focusmode off'
+
+(Stopping anyway — you can run focusmode next on next session)"
+    # Non-blocking when ready — just remind via stderr
+    echo "$REASON" >&2
+    exit 0
+else
+    # Exit conditions NOT met — block stop with nudge
+    REASON="FOCUSMODE:$STATE — NOT DONE.
+
+${PROBE_MSG}
+
+What to do: $WHAT
+
+Run 'focusmode-probe' to check readiness.
+Run 'focusmode next' when exit conditions are met.
+Escape: 'focusmode escape \"<reason>\"' (use sparingly)."
+
+    jq -n --arg body "$REASON" \
+        '{
+            source: "15-focusmode",
+            status: "ok",
+            next_turn: "continue",
+            messages: [{
+                id: "focusmode_exit_conditions",
+                severity: "blocker",
+                title: "FocusMode exit conditions not met",
+                body: $body,
+                actions: ["Bash(focusmode-probe)", "Bash(focusmode next)", "Bash(focusmode escape \"<reason>\")"]
+            }]
+        }'
+    exit 0
+fi

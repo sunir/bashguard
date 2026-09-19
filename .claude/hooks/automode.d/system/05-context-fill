@@ -1,0 +1,114 @@
+#!/bin/bash
+# Plugin: automode.d/05-context-fill
+# Story: CONTEXT-ENGINE-PLUGIN
+#
+# CONTRACT (automode.d watcher plugin):
+#   - Runs in relax loop while Claude is idle / stopping
+#   - stdout: one line when triggered → becomes wakeup reason
+#   - exit 1 to skip silently
+#
+# DATA SOURCE: Same as the Stop hook — last assistant message's .message.usage
+#   in the active transcript file. This is the harness's exact token count,
+#   not a byte estimate.
+#
+# GROWTH GUARD: Only re-fires if usage has grown >REFIRE_PCT (default 25%)
+#   since last warning, preventing loops after /sleep that haven't made progress.
+#
+# CONFIG (settings/context-engine.json):
+#   context_tokens: 200000   — explicit window size (auto-bumps to 1M if usage > 200k)
+#   warn_pct: 75             — percent at which advisory fires
+#   refire_pct: 25           — minimum growth % before re-warning
+#
+# FAIL-OPEN: missing transcript, missing jq, no usage data → exit 1 silently.
+
+command -v jq >/dev/null 2>&1 || exit 1
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
+# shellcheck source=lib/models.sh
+source "$LIB_DIR/models.sh" 2>/dev/null || true
+
+CONTEXT_TOKENS=200000
+WARN_PCT=75
+REFIRE_PCT=25
+
+CONFIG="$PWD/settings/context-engine.json"
+_explicit_ct=""
+if [[ -f "$CONFIG" ]]; then
+    _explicit_ct=$(jq -r '.context_tokens // empty' "$CONFIG" 2>/dev/null)
+    _wp=$(jq -r '.warn_pct // empty' "$CONFIG" 2>/dev/null)
+    _rp=$(jq -r '.refire_pct // empty' "$CONFIG" 2>/dev/null)
+    [[ -n "$_explicit_ct" ]] && CONTEXT_TOKENS="$_explicit_ct"
+    [[ -n "$_wp" ]] && WARN_PCT="$_wp"
+    [[ -n "$_rp" ]] && REFIRE_PCT="$_rp"
+fi
+
+# ── Find current transcript ────────────────────────────────────────────────────
+
+TRANSCRIPT=""
+
+if [[ -n "${SESSION_ID:-}" ]]; then
+    escaped_cwd="$(pwd | sed 's|/|-|g')"
+    candidate="$HOME/.claude/projects/${escaped_cwd}/${SESSION_ID}.jsonl"
+    [[ -f "$candidate" ]] && TRANSCRIPT="$candidate"
+fi
+
+if [[ -z "$TRANSCRIPT" ]]; then
+    escaped_cwd="$(pwd | sed 's|/|-|g')"
+    # Filter archived files — compaction creates -archived-TIMESTAMP.jsonl with a fresh
+    # mtime, so ls -t would pick the archive instead of the active session file.
+    TRANSCRIPT=$(ls -t "$HOME/.claude/projects/${escaped_cwd}/"*.jsonl 2>/dev/null \
+        | grep -v '\-archived-' | head -1)
+fi
+
+[[ -z "$TRANSCRIPT" || ! -f "$TRANSCRIPT" ]] && exit 1
+
+# ── Read usage signal ──────────────────────────────────────────────────────────
+
+CURRENT=$(grep '"type":"assistant"' "$TRANSCRIPT" | tail -1 | jq -r '
+    .message.usage |
+    (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)
+' 2>/dev/null)
+
+[[ -z "$CURRENT" || "$CURRENT" == "null" || "$CURRENT" -eq 0 ]] && exit 1
+
+# Detect context window size. Priority: explicit config → model ID → max-usage fallback.
+if [[ -z "$_explicit_ct" ]]; then
+    MODEL_ID=$(grep '"type":"assistant"' "$TRANSCRIPT" | tail -1 | jq -r '.message.model // empty' 2>/dev/null)
+    read -r CONTEXT_TOKENS _ <<< "$(get_model_info "${MODEL_ID:-}")"
+    # Fallback: any prior usage > 200k → must be a larger window
+    if [[ "$CONTEXT_TOKENS" -le 200000 ]]; then
+        MAX_SEEN=$(grep '"type":"assistant"' "$TRANSCRIPT" | jq -r '
+            .message.usage |
+            (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)
+        ' 2>/dev/null | sort -n | tail -1)
+        [[ -n "$MAX_SEEN" && "$MAX_SEEN" -gt 200000 ]] && CONTEXT_TOKENS=1000000
+    fi
+fi
+
+WARN_TOKENS=$(( CONTEXT_TOKENS * WARN_PCT / 100 ))
+
+[[ $CURRENT -lt $WARN_TOKENS ]] && exit 1
+
+# Already napped this session — keep working, don't nudge again until a real
+# PreCompact clears this (see PreCompact.d/system/50-marker). Otherwise this
+# watcher re-fires every REFIRE_PCT growth even right after a nap, telling the
+# agent to stop and hand off repeatedly instead of continuing to work up to
+# the point autocompaction actually triggers.
+[[ -f "$PWD/.automode/context-napped" ]] && exit 1
+
+# ── Growth guard — don't re-fire until usage grows significantly ───────────────
+
+FIRED_FLAG="$PWD/.automode/context-fill-fired"
+if [[ -f "$FIRED_FLAG" ]]; then
+    last_tokens="$(cat "$FIRED_FLAG" 2>/dev/null)"
+    if [[ -n "$last_tokens" && "$last_tokens" -gt 0 ]]; then
+        growth=$(( (CURRENT - last_tokens) * 100 / last_tokens ))
+        [[ $growth -lt $REFIRE_PCT ]] && exit 1
+    fi
+fi
+
+PCT=$(( CURRENT * 100 / CONTEXT_TOKENS ))
+[[ -d "$PWD/.automode" ]] || exit 1
+echo "$CURRENT" > "$FIRED_FLAG"
+echo "Context fill ${PCT}% (${CURRENT} / ${CONTEXT_TOKENS} tokens) — run /nap to hand off to the next session."

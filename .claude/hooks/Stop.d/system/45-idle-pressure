@@ -1,0 +1,241 @@
+#!/bin/bash
+# Plugin: idle-pressure (Stop)
+# Story: IDLE-PRESSURE-ESCALATE
+#
+# PURPOSE: Escalate stop-hook urgency when .todo.json hasn't changed across
+#   multiple stop cycles. Nudge → warning → mandatory reorg.
+#
+# STATE FILE: .automode/idle-pressure (gitignored via .automode/)
+#   {"cycles": N, "hash": "sha256..."}
+# Note: was .automode-idle-pressure (flat) before migration; automode
+# binary's _migrate_flat_files moves it on next entry.
+#
+# ESCALATION:
+#   1-2 cycles: silent
+#   3-4 cycles: nudge (stderr, exit 0)
+#   5-7 cycles: warning (next_turn continue)
+#   8+ cycles:  mandatory reorg + full index card guide (next_turn continue)
+
+emit_continue_json() {
+    local title="$1"
+    local body="$2"
+    shift 2
+    local actions_json
+    actions_json="$(printf '%s\n' "$@" | jq -R . | jq -s .)"
+    jq -n \
+        --arg title "$title" \
+        --arg body "$body" \
+        --argjson actions "$actions_json" \
+        '{
+            source: "45-idle-pressure",
+            status: "ok",
+            next_turn: "continue",
+            messages: [{
+                id: "idle_pressure",
+                severity: "blocker",
+                title: $title,
+                body: $body,
+                actions: $actions
+            }]
+        }'
+}
+
+[ -f .todo.json ] || exit 0
+
+# Respect explicit relax — agent signalled "waiting for external input, done
+# for now". Every sibling Stop.d plugin that can nag (15-focusmode, todo.sh's
+# continue-request, briefing.sh's holding-nudge) already stands down on this
+# sentinel; this plugin's own mandatory-reorg escape-hatch text tells the
+# agent to run `automode` (relax) as the way out, so it must honor it too.
+# Reset cycle counter so pressure doesn't resume the instant relax lifts —
+# mirrors the background-agents reset below.
+# Story: IDLE-PRESSURE-RELAX
+if [[ -f .automode/relax ]]; then
+    mkdir -p .automode 2>/dev/null || true
+    if command -v shasum >/dev/null 2>&1; then
+        _hash="$(shasum -a 256 .todo.json | cut -d' ' -f1)"
+    elif command -v sha256sum >/dev/null 2>&1; then
+        _hash="$(sha256sum .todo.json | cut -d' ' -f1)"
+    fi
+    if [ -n "${_hash:-}" ]; then
+        _done_lines=0
+        [[ -f done.log ]] && _done_lines="$(wc -l < done.log 2>/dev/null | tr -d ' ')" && _done_lines="${_done_lines:-0}"
+        printf '{"cycles":0,"hash":"%s:%s"}\n' "$_hash" "$_done_lines" > .automode/idle-pressure 2>/dev/null
+    fi
+    exit 0
+fi
+
+# Read INPUT (JSON from dispatcher via stdin) for background_tasks check below.
+INPUT="$(cat 2>/dev/null)"
+
+# Skip if background agents are running — Claude is intentionally waiting for
+# them, not stuck. Reset cycle counter so pressure doesn't build up.
+# Story: AUTOMODE-BACKGROUND-TASKS, IDLE-PRESSURE-SKIP-UNCERTAIN-BG
+# Fail-safe: if jq parse fails (bad JSON, absent jq), bg-task state is unknown —
+# skip idle pressure entirely rather than risk escalating against active agents.
+_BG_RUNNING="$(printf '%s' "$INPUT" | jq -r '[.background_tasks[]? | select(.status == "running")] | length' 2>/dev/null)"
+_BG_JQ_EC=$?
+if [[ $_BG_JQ_EC -ne 0 || -z "$_BG_RUNNING" ]]; then
+    exit 0
+fi
+if [[ "${_BG_RUNNING}" -gt 0 ]]; then
+    # Reset idle cycle count so pressure doesn't accumulate while waiting.
+    if [ -f .todo.json ]; then
+        _hash="$(shasum -a 256 .todo.json 2>/dev/null | cut -d' ' -f1 || sha256sum .todo.json 2>/dev/null | cut -d' ' -f1 || echo '')"
+        [ -n "$_hash" ] && printf '{"cycles":0,"hash":"%s"}\n' "$_hash" > ".automode/idle-pressure" 2>/dev/null
+    fi
+    exit 0
+fi
+
+STATE_FILE=".automode/idle-pressure"
+mkdir -p .automode 2>/dev/null || true
+
+# Compute movement signal: hash of .todo.json + done.log line count.
+# Completing and archiving todos changes done.log, not just .todo.json.
+# Including done.log line count ensures completed work counts as movement.
+# Story: IDLE-PRESSURE-ESCALATE (fix: done/archive events count as movement)
+if command -v shasum >/dev/null 2>&1; then
+    _todo_hash="$(shasum -a 256 .todo.json | cut -d' ' -f1)"
+elif command -v sha256sum >/dev/null 2>&1; then
+    _todo_hash="$(sha256sum .todo.json | cut -d' ' -f1)"
+else
+    exit 0  # No sha tool — fail open
+fi
+_done_lines=0
+[[ -f done.log ]] && _done_lines="$(wc -l < done.log 2>/dev/null | tr -d ' ')" && _done_lines="${_done_lines:-0}"
+current_hash="${_todo_hash}:${_done_lines}"
+
+# Exempt: if there are no actionable available todos and exactly one taken (watch role),
+# don't escalate — a long-running watch card is intentional, not stuck.
+# Story: IDLE-PRESSURE-ESCALATE (fix: exempt standing watch card)
+#
+# Exclude [story] and [spec] items from avail count — they auto-regenerate from
+# stories/ and specs/ folders every cycle and are not agent-actionable. Without this
+# filter, a watch role in any repo with a stories/ folder can never be exempt
+# (avail count is always > 0 due to story items, even if all real work is done).
+if command -v todo >/dev/null 2>&1; then
+    _avail="$(todo filter avail 2>/dev/null | grep '\[avail\].*%' | grep -v '\[story\]\|\[spec' | wc -l | tr -d ' ')"
+    _taken="$(todo filter taken 2>/dev/null | grep '\[taken\].*%' | wc -l | tr -d ' ')"
+    if [[ "${_avail:-1}" -eq 0 && "${_taken:-0}" -eq 1 ]]; then
+        exit 0  # Single watch card — intentional holding pattern, not stuck
+    fi
+fi
+
+# Read existing state
+# Story: IDLE-PRESSURE-TRANSCRIPT-ACTIVITY
+cycles=0
+last_hash=""
+last_line=0
+if [ -f "$STATE_FILE" ]; then
+    cycles="$(jq -r '.cycles // 0' "$STATE_FILE" 2>/dev/null || echo 0)"
+    last_hash="$(jq -r '.hash // ""' "$STATE_FILE" 2>/dev/null || echo '')"
+    last_line="$(jq -r '.last_line // 0' "$STATE_FILE" 2>/dev/null || echo 0)"
+fi
+
+# Check transcript for new activity since last_line.
+# Story: IDLE-PRESSURE-TRANSCRIPT-ACTIVITY
+#
+# Path priority (Story: IDLE-PRESSURE-TRANSCRIPT):
+#   1. IDLE_PRESSURE_TRANSCRIPT_PATH — test-only override.
+#   2. $INPUT.transcript_path — the CURRENT session's own, unambiguous
+#      transcript file (already piped via stdin to every Stop.d plugin,
+#      same field siblings like 45-context-engine/55-evidence-gate already
+#      read). Correct by construction — no resolution ambiguity possible.
+#   3. `transcript latest path` — last-resort fallback for callers that
+#      somehow invoke this plugin without INPUT on stdin. `transcript`'s own
+#      "latest" resolution has a confirmed bug (case-mismatch in project-dir
+#      matching, see stories/transcript-git-log-direct-write.md) that can
+#      pick a stale/wrong session; kept only as a soft-degrading last resort
+#      since a stale read here corrupts idle detection but doesn't corrupt
+#      another tool's file the way a write-side fallback would.
+transcript_activity=0
+current_line=0
+_input_transcript_path="$(printf '%s' "${INPUT:-}" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+_jsonl_path="${IDLE_PRESSURE_TRANSCRIPT_PATH:-${_input_transcript_path:-$(transcript latest path 2>/dev/null)}}"
+if [[ -n "$_jsonl_path" && -f "$_jsonl_path" ]]; then
+    current_line="$(wc -l < "$_jsonl_path" | tr -d ' ')"
+    if [[ "${last_line:-0}" -lt "$current_line" ]]; then
+        transcript_activity="$(tail -n +$((last_line + 1)) "$_jsonl_path" | \
+            { grep -cE '"tool_use"|"type":"user"' 2>/dev/null || true; })"
+    fi
+fi
+[[ "$current_line" -gt 0 ]] && last_line="$current_line"
+
+# Reset if todo state, done count, or transcript activity changed
+if [ "$current_hash" != "$last_hash" ] || [ "${transcript_activity:-0}" -gt 0 ]; then
+    printf '{"cycles":0,"hash":"%s","last_line":%d}\n' \
+        "$current_hash" "${last_line:-0}" > "$STATE_FILE"
+    exit 0
+fi
+
+# Increment cycle count
+cycles=$((cycles + 1))
+printf '{"cycles":%d,"hash":"%s","last_line":%d}\n' \
+    "$cycles" "$current_hash" "${last_line:-0}" > "$STATE_FILE"
+
+# Silent at 1-2
+[ "$cycles" -le 2 ] && exit 0
+
+# Nudge at 3-4
+if [ "$cycles" -le 4 ]; then
+    echo "Tip: todos unchanged for ${cycles} stop cycles. Take something: Bash(todo) then Bash(todo N take)" >&2
+    exit 0
+fi
+
+# Warning at 5-7
+if [ "$cycles" -le 7 ]; then
+    body="$(cat <<EOF
+WARNING: todos unchanged for ${cycles} stop cycles.
+
+The todo system tracks your work. Nothing is moving.
+Run: Bash(todo) then Bash(todo N take)
+EOF
+)"
+    emit_continue_json \
+        "Todos are not moving" \
+        "$body" \
+        "Bash(todo)" \
+        "Bash(todo N take)"
+    exit 0
+fi
+
+# Mandatory reorg at 8+
+# Bash 3.2 (macOS) misparses single quotes inside heredocs when the heredoc
+# is inside $(...). Use a temp file so the heredoc stands alone, then read it.
+_body_tmp="$(mktemp)"
+cat > "$_body_tmp" << 'REORG_EOF'
+MANDATORY REORG — todos unchanged for 8+ stop cycles.
+
+THE INDEX CARD SYSTEM
+─────────────────────
+ONE CARDFUL: Take one card and work it until done.
+  Push only to digress; pop to return.
+
+STACK PRIORITY: Last pushed = top priority.
+  Don't reorder without cause (blocker, deadline, resource, batching).
+
+EVIDENCE: A card is complete when proof exists.
+  "Worked on it" is not done. Show the commit, the file, the result.
+
+FAITHFUL CAPTURE: Don't rewrite the pusher's words.
+
+STATES: Pushed → Active → Complete / Blocked / Deferred
+
+TO ESCAPE THIS BLOCK
+────────────────────
+1. Run: Bash(todo all)
+2. Defer or delete anything no longer relevant — Bash(todo N defer)
+3. Take at least one item: Bash(todo N take)
+4. This block lifts when you take, complete, defer, or add a todo.
+   If genuinely blocked waiting for a human, defer everything and
+   run: automode → the session will enter relax and wait properly.
+REORG_EOF
+body="$(cat "$_body_tmp")"
+rm -f "$_body_tmp"
+emit_continue_json \
+    "Mandatory todo reorg" \
+    "$body" \
+    "Bash(todo all)" \
+    "Bash(todo N defer)" \
+    "Bash(todo N take)"
+exit 0

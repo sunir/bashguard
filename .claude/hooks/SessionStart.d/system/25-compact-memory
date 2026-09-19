@@ -1,0 +1,74 @@
+#!/bin/bash
+# Plugin: compact-memory (SessionStart)
+# Story: memory-decay
+#
+# WHY: When Claude Code compacts the context, a compaction summary is written
+#      to the transcript. This is the natural moment to distill that summary
+#      into permanent memory — pruning stale entries and adding new ones.
+#      Without this, MEMORY.md grows unbounded and accumulates stale context.
+#
+# WHEN: Fires only on SessionStart with source=compact.
+#
+# RESULT: Injects instructions into Claude's initial context telling it to
+#         process the compaction summary into MEMORY.md (prune stale, add new).
+#         Claude acts on these instructions at the start of the new session.
+
+set -euo pipefail
+
+INPUT="${INPUT:-$(cat)}"
+
+# Only act on compaction restarts
+SOURCE="$(printf '%s' "$INPUT" | jq -r '.source // ""')"
+[[ "$SOURCE" == "compact" ]] || exit 0
+
+TRANSCRIPT_PATH="$(printf '%s' "$INPUT" | jq -r '.transcript_path // ""')"
+[[ -f "$TRANSCRIPT_PATH" ]] || exit 0
+
+# Extract the compaction summary from the most recent compact_boundary entry
+COMPACT_SUMMARY="$(python3 - "$TRANSCRIPT_PATH" <<'PYEOF'
+import sys, json
+path = sys.argv[1]
+summary = None
+with open(path) as f:
+    for line in f:
+        try:
+            e = json.loads(line)
+            if e.get('subtype') == 'compact_boundary':
+                # summary may be nested under 'summary' or 'message'
+                summary = e.get('summary') or e.get('message') or ''
+        except:
+            pass
+if summary:
+    # Truncate to ~2000 chars to avoid flooding context
+    print(summary[:2000])
+PYEOF
+)"
+
+[[ -z "$COMPACT_SUMMARY" ]] && exit 0
+
+# Compute MEMORY.md path for this repo
+CLAUDE_HOME="${CLAUDE_HOME:-$(eval echo ~claude)}"
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+CWD_SLUG="$(cd "$REPO_ROOT" && git rev-parse --show-toplevel 2>/dev/null | tr '/' '-')"
+MEMORY_DIR="$CLAUDE_HOME/.claude/projects/$CWD_SLUG/memory"
+MEMORY_MD="$MEMORY_DIR/MEMORY.md"
+
+# Stdout is injected into Claude's initial context on SessionStart
+cat <<PROMPT
+== COMPACT MEMORY TASK ==
+Session resumed after context compaction. The compaction summary follows.
+Before doing any other work, update your permanent memory (MEMORY.md) to
+reflect what changed:
+
+1. Read $MEMORY_MD (your persistent memory index)
+2. Read the memory files it references
+3. For each memory: delete if stale/completed, update if changed, keep if still true
+4. Add new memories for anything significant in the compaction summary
+5. Write updated files back to $MEMORY_DIR/
+
+Compaction summary:
+$COMPACT_SUMMARY
+
+After updating memory, proceed with whatever work was in progress.
+== END COMPACT MEMORY TASK ==
+PROMPT

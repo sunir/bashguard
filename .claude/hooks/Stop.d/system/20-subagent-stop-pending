@@ -1,0 +1,33 @@
+#!/bin/bash
+# Plugin: subagent-stop-pending (Stop)
+# Story: SUBAGENT-STOP-PENDING, SUBAGENT-STOP-PENDING-MUTEX, SUBAGENT-STOP-PENDING-2,
+#        STOP-HOOK-STRIP-AUTOMODE, SUBAGENTS-DATA-TOOL, SUBAGENT-STOP-PENDING-SESSION-SCOPE
+#
+# PURPOSE: Block the stop once when a subagent has just finished and its
+#   result has not been surfaced yet, so the session reacts to it instead of
+#   silently continuing past a completed background agent.
+#
+# The lock/staleness/dedup/session-scoping mechanics live in bin/subagents
+# now (Sunir: "gives information about the current subagents that we can
+# then compute against"). This plugin just claims and translates the
+# result into the Stop plugin JSON contract -- it doesn't know how a claim
+# is decided, only what to say when one comes back pending=true.
+
+command -v subagents >/dev/null 2>&1 || exit 0
+
+result="$(subagents claim --session-id "${SESSION_ID:-}")"
+[[ "$(printf '%s' "$result" | jq -r '.pending // false' 2>/dev/null)" == "true" ]] || exit 0
+
+agent="$(printf '%s' "$result" | jq -r '.agent_id // "unknown"' 2>/dev/null)"
+jq -n --arg agent "$agent" '{
+    source: "20-subagent-stop-pending",
+    status: "ok",
+    next_turn: "continue",
+    messages: [{
+        id: "subagent_stop_pending",
+        severity: "blocker",
+        title: "Subagent finished",
+        body: ("A background subagent (" + $agent + ") just completed and its result has not been surfaced yet.")
+    }]
+}'
+exit 0

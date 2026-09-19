@@ -1,0 +1,136 @@
+#!/bin/bash
+# Plugin: context-engine (Stop)
+# Story: CONTEXT-ENGINE-PLUGIN
+#
+# PURPOSE: Detect actual context fill using the harness's usage signal from the
+#   transcript (input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+#   on each assistant message) and warn before context overflows.
+#
+# DATA SOURCE: Each assistant message in transcript_path has a .message.usage
+#   block with exact token counts. We read the LAST assistant message's usage
+#   to get current context fill — same numbers Claude Code uses internally.
+#
+# CONTEXT WINDOW DETECTION (in priority order):
+#   1. settings/context-engine.json#context_tokens (explicit override)
+#   2. Hook input .model.display_name contains "1M" → 1000000 tokens
+#   3. Any assistant message in transcript exceeded 200000 → 1000000 (fallback)
+#   4. Default 200000 (Sonnet/Haiku, Opus 200k variant)
+#
+# PROTOCOL: exit 0 always (advisory, never blocks). stderr advisory + adds a
+#   todo once per threshold crossing. WARN_FLAG suppresses duplicates.
+# FAIL-OPEN: missing transcript, missing jq, no assistant messages → exit 0.
+
+INPUT=$(cat)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
+LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
+# shellcheck source=lib/models.sh
+source "$LIB_DIR/models.sh" 2>/dev/null || true
+
+CONTEXT_TOKENS=200000
+WARN_PCT=75
+
+CONFIG="$REPO_ROOT/settings/context-engine.json"
+_explicit_ct=""
+if [[ -f "$CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+    _explicit_ct=$(jq -r '.context_tokens // empty' "$CONFIG" 2>/dev/null)
+    _wp=$(jq -r '.warn_pct // empty' "$CONFIG" 2>/dev/null)
+    [[ -n "$_explicit_ct" ]] && CONTEXT_TOKENS="$_explicit_ct"
+    [[ -n "$_wp" ]] && WARN_PCT="$_wp"
+fi
+
+WARN_FLAG="$REPO_ROOT/.automode/context-warn"
+NAP_FLAG="$REPO_ROOT/.automode/context-napped"
+
+# jq is normally in /usr/bin, but prepend HOME-relative dirs for parity with the
+# other Stop hooks and warn loud rather than silently skipping context-fill
+# detection. Story: CHECK-MSGS-PATH-GUARD (flow %83).
+case ":$PATH:" in *":$HOME/bin:"*) ;; *) [ -d "$HOME/bin" ] && PATH="$HOME/bin:$PATH" ;; esac
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) [ -d "$HOME/.local/bin" ] && PATH="$HOME/.local/bin:$PATH" ;; esac
+command -v jq >/dev/null 2>&1 || \
+    { echo "45-context-engine: 'jq' not found on PATH — context-fill detection SKIPPED." >&2; exit 0; }
+
+TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+[[ -z "$TRANSCRIPT" || ! -f "$TRANSCRIPT" ]] && exit 0
+
+# Pull last assistant message's usage block. Tolerate lines that aren't valid
+# JSON or assistant rows without usage data.
+CURRENT=$(grep '"type":"assistant"' "$TRANSCRIPT" | tail -1 | jq -r '
+    .message.usage |
+    (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)
+' 2>/dev/null)
+
+[[ -z "$CURRENT" || "$CURRENT" == "null" || "$CURRENT" -eq 0 ]] && exit 0
+
+# Detect context window size. Priority: explicit config → model ID → max-usage fallback.
+if [[ -z "$_explicit_ct" ]]; then
+    MODEL_ID=$(grep '"type":"assistant"' "$TRANSCRIPT" | tail -1 | jq -r '.message.model // empty' 2>/dev/null)
+    MODEL_NAME=$(echo "$INPUT" | jq -r '.model.display_name // empty' 2>/dev/null)
+    read -r CONTEXT_TOKENS _ <<< "$(get_model_info "${MODEL_ID:-$MODEL_NAME}")"
+    # Fallback: any prior usage > 200k → must be a larger window
+    if [[ "$CONTEXT_TOKENS" -le 200000 ]]; then
+        MAX_SEEN=$(grep '"type":"assistant"' "$TRANSCRIPT" | jq -r '
+            .message.usage |
+            (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)
+        ' 2>/dev/null | sort -n | tail -1)
+        [[ -n "$MAX_SEEN" && "$MAX_SEEN" -gt 200000 ]] && CONTEXT_TOKENS=1000000
+    fi
+fi
+
+WARN_TOKENS=$(( CONTEXT_TOKENS * WARN_PCT / 100 ))
+
+# Below threshold: recovery — clear flag, exit silent
+if [[ $CURRENT -lt $WARN_TOKENS ]]; then
+    # Guard: .automode may be a legacy flat file (ENOTDIR) rather than a directory
+    [[ -d "${WARN_FLAG%/*}" ]] && rm -f "$WARN_FLAG" || true
+    exit 0
+fi
+
+PCT=$(( CURRENT * 100 / CONTEXT_TOKENS ))
+
+# If nap/sleep already ran this session, shift to "keep working" mode.
+# Check the flag BEFORE printing anything.
+if [[ -f "$NAP_FLAG" ]]; then
+    cat >&2 <<EOF
+Context fill: ${PCT}% (${CURRENT} / ${CONTEXT_TOKENS} tokens)
+You've already napped. Keep working — autocompaction will trigger automatically.
+EOF
+    exit 0
+fi
+
+# Suppress if last commit message contains nap/sleep (fallback when flag is missing)
+_last_commit=$(git -C "$REPO_ROOT" log -1 --format="%s" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+[[ "$_last_commit" == *"sleep"* || "$_last_commit" == *"nap"* ]] && exit 0
+
+# At >95%: napping won't help — only autocompaction can clear context at this point.
+# Keep working to push context over the limit and let the harness compact.
+if [[ $PCT -ge 95 ]]; then
+    cat >&2 <<EOF
+⚠  Context fill: ${PCT}% (${CURRENT} / ${CONTEXT_TOKENS} tokens)
+   Context is too full to nap. Keep working — autocompaction will trigger automatically.
+EOF
+    exit 0
+fi
+
+# Guard: skip nap advice entirely when automode is OFF — /nap creates .automode/
+# unconditionally and would silently re-enable automode. If automode is off, just
+# warn that context is high and let autocompaction handle it.
+if [[ ! -d "$REPO_ROOT/.automode" ]]; then
+    cat >&2 <<EOF
+⚠  Context fill: ${PCT}% (${CURRENT} / ${CONTEXT_TOKENS} tokens)
+   Context is high. Automode is OFF — keep working; autocompaction will trigger automatically.
+EOF
+    exit 0
+fi
+
+cat >&2 <<EOF
+⚠  Context fill: ${PCT}% (${CURRENT} / ${CONTEXT_TOKENS} tokens)
+   Run /nap to hand off to the next session.
+EOF
+
+if [[ ! -f "$WARN_FLAG" ]]; then
+    echo "$PCT" > "$WARN_FLAG"
+fi
+
+exit 0

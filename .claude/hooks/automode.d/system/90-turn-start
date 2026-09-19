@@ -1,0 +1,50 @@
+#!/bin/bash
+# Plugin: turn-start (automode)
+# Story: turn-log-entries
+#
+# WHY: Automode triggers a new turn without a user prompt — the agent wakes
+#      from an automode watcher (msg, todo, gitorphan, etc.) and continues.
+#      This logs a turn_start so the boundary is computable, with the watcher
+#      name as the trigger so you know what caused the continuation.
+#
+# PROTOCOL: automode plugins receive the same Stop INPUT + a watcher field
+#           identifying which automode plugin triggered the wakeup.
+#           Always exits 0 (never blocks the automode decision).
+
+INPUT=$(cat)
+
+TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+
+if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
+    SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    [[ -z "$SESSION_ID" ]] && exit 0
+    CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+    [[ -z "$CWD" ]] && CWD="$PWD"
+    ESCAPED_CWD=$(printf '%s' "$CWD" | sed 's|/|-|g; s|_|-|g')
+    TRANSCRIPT_PATH="${HOME:-$(eval echo ~claude)}/.claude/projects/${ESCAPED_CWD}/${SESSION_ID}.jsonl"
+fi
+
+[[ -f "$TRANSCRIPT_PATH" ]] || exit 0
+
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+# watcher field set by automode wait when a plugin triggers (e.g. "msg", "todo", "watch-files")
+WATCHER=$(printf '%s' "$INPUT" | jq -r '.watcher // "automode"' 2>/dev/null)
+WATCHER="${WATCHER:-automode}"
+
+python3 - "$TRANSCRIPT_PATH" "$SESSION_ID" "$WATCHER" 2>/dev/null <<'PYEOF'
+import json, sys, uuid
+from datetime import datetime, timezone
+path, session_id, watcher = sys.argv[1], sys.argv[2], sys.argv[3]
+entry = {
+    "type": "log",
+    "uuid": str(uuid.uuid4()),
+    "sessionId": session_id,
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "text": f"turn_start trigger=automode watcher={watcher}",
+    "data": {"event": "turn_start", "trigger": "automode", "watcher": watcher},
+}
+with open(path, 'a') as f:
+    f.write(json.dumps(entry) + '\n')
+PYEOF
+
+exit 0

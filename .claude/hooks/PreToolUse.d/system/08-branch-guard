@@ -1,0 +1,73 @@
+#!/bin/bash
+# Plugin: branch-guard (PreToolUse)
+#
+# PURPOSE: Block Write/Edit on a protected branch (main/production) in repos
+#   whose commits to that branch are rejected by the deploy pre-commit hook.
+#   Catches the problem early — before you do a pile of work that then can't
+#   be committed — and tells you to branch first.
+#
+# WHEN IT FIRES (all must hold):
+#   1. Tool is Write/Edit/MultiEdit
+#   2. Target file's repo is on `main` or `production`
+#   3. That repo has the deploy branch-protection pre-commit hook
+#      (greps for "Cannot commit directly to" in .git/hooks/pre-commit)
+#   4. Target path is NOT gitignored (gitignored files never get committed,
+#      so editing them on main is fine — .automode/, sessions/, etc.)
+#
+# WHY gate on the pre-commit hook: repos without it (e.g. Sysop) legitimately
+#   work on main. Only block where the commit would actually be rejected.
+#
+# PROTOCOL: exit 2 + stdout reason → blocks the tool call.
+# FAIL-OPEN: missing jq/git, path outside any repo, any error → exit 0.
+
+INPUT=$(cat)
+command -v jq >/dev/null 2>&1 || exit 0
+command -v git >/dev/null 2>&1 || exit 0
+
+TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
+case "$TOOL_NAME" in
+    Edit|Write|MultiEdit) ;;
+    *) exit 0 ;;
+esac
+
+FILE_PATH=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // empty' 2>/dev/null)
+[[ -z "$FILE_PATH" ]] && exit 0
+
+# Resolve to absolute against the tool's cwd (fallback: PWD).
+if [[ "$FILE_PATH" != /* ]]; then
+    FILE_PATH="$PWD/$FILE_PATH"
+fi
+
+# Locate the git repo containing the target file's directory.
+TARGET_DIR="$(dirname "$FILE_PATH")"
+[[ -d "$TARGET_DIR" ]] || exit 0   # parent doesn't exist yet — can't classify; fail-open
+REPO="$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null)"
+[[ -z "$REPO" ]] && exit 0   # not in a git repo
+
+BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+case "$BRANCH" in
+    main|production) ;;
+    *) exit 0 ;;   # not on a protected branch
+esac
+
+# Only block if THIS repo's commits to the branch are actually rejected.
+PRECOMMIT="$REPO/.git/hooks/pre-commit"
+[[ -f "$PRECOMMIT" ]] || exit 0
+grep -q "Cannot commit directly to" "$PRECOMMIT" 2>/dev/null || exit 0
+
+# Gitignored targets never get committed — editing them on main is harmless.
+if git -C "$REPO" check-ignore -q "$FILE_PATH" 2>/dev/null; then
+    exit 0
+fi
+
+REPO_NAME="$(basename "$REPO")"
+cat >&2 <<MSG
+⛔ Blocked: you're on the protected '$BRANCH' branch in $REPO_NAME.
+Commits to '$BRANCH' are rejected by this repo's pre-commit hook, so this
+edit could not be committed. Branch first, then edit:
+
+    git -C "$REPO" checkout -b <descriptive-feature-name>
+
+(Gitignored files are exempt; this guard only fires for tracked work.)
+MSG
+exit 2

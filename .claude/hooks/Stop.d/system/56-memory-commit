@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Plugin: memory-commit (Stop)
+# Snapshot project memory files to a per-host file and commit.
+# Fail-open: exits 0 silently if no memory dir, no git, or no changes.
+#
+# Story: MEMORY-COMMIT-PER
+#
+# WHY PER-HOST, NOT ONE SHARED FILE:
+#   Previously wrote core/memory.claude.md — ONE tracked path. Two hosts
+#   (lisbeth, ocean) each regenerate that same path wholesale from their own
+#   host-local memory dir, so their content diverges by construction. Any
+#   rebase/merge conflict on it then TRUNCATES whichever host's version
+#   loses — this actually happened (automode: 1671 -> 499 lines). Writing to
+#   core/memory.<hostname>.claude.md removes the shared-path contention
+#   entirely: each host only ever touches its own file.
+#
+# WHY STALE-LOCK DETECTION:
+#   A killed git process (OOM guard, session teardown) can strand
+#   .git/index.lock. The old version swallowed that failure silently
+#   ('|| true'), disabling this hook forever with zero signal — found
+#   stranding 8 repos' git operations, one for two weeks. A lock older than
+#   STALE_LOCK_MINUTES almost certainly means the process that created it is
+#   long dead (real git operations complete in seconds), so it's cleared.
+
+set -uo pipefail
+
+STALE_LOCK_MINUTES=10
+
+MEMORY_DIR="${MEMORY_DIR:-$(eval echo ~claude)/.claude/projects/$(printf '%s' "$PWD" | tr '/' '-')/memory}"
+[[ -d "$MEMORY_DIR" ]] || exit 0
+git rev-parse --git-dir &>/dev/null || exit 0
+
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)"
+LOCK="$GIT_DIR/index.lock"
+
+if [[ -f "$LOCK" ]] && find "$LOCK" -mmin "+$STALE_LOCK_MINUTES" 2>/dev/null | grep -q .; then
+    rm -f "$LOCK"
+    printf '56-memory-commit: cleared stale index.lock (older than %sm)\n' "$STALE_LOCK_MINUTES" >&2
+fi
+
+# Best-effort: if this process itself is killed, don't leave a lock stranded.
+trap 'rm -f "$LOCK" 2>/dev/null' INT TERM
+
+HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
+OUT_FILE="core/memory.$HOST.claude.md"
+
+mkdir -p core
+
+{
+    for f in "$MEMORY_DIR"/MEMORY.md "$MEMORY_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        [[ "$(basename "$f")" == "MEMORY.md" ]] && [[ "$f" != "$MEMORY_DIR/MEMORY.md" ]] && continue
+        printf '# %s\n\n' "$(basename "$f")"
+        cat "$f"
+        printf '\n\n'
+    done
+} > "$OUT_FILE"
+
+add_output="$(git add -- "$OUT_FILE" 2>&1)"
+add_ec=$?
+if [[ $add_ec -ne 0 ]]; then
+    printf '56-memory-commit: git add failed: %s\n' "$add_output" >&2
+    exit 0
+fi
+
+git diff --cached --quiet -- "$OUT_FILE" && exit 0
+
+# Pathspec-limited: commits ONLY $OUT_FILE, never sweeps up whatever else
+# happens to already be staged (a plain `git commit` with no pathspec would).
+commit_output="$(git commit -m "chore: memory snapshot [auto] ($HOST)" --no-verify -- "$OUT_FILE" 2>&1)"
+commit_ec=$?
+if [[ $commit_ec -ne 0 ]]; then
+    printf '56-memory-commit: git commit failed: %s\n' "$commit_output" >&2
+    exit 0
+fi

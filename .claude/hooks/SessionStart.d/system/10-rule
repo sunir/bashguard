@@ -1,0 +1,38 @@
+#!/bin/bash
+# Plugin: rule (SessionStart)
+# Story: composable-rules
+#
+# PURPOSE: Inject startup rules at session start.
+#   Reads rules/SessionStart/*.md — lifecycle-scoped startup discipline.
+#
+# PROTOCOL: stdout empty (hook-safe), stderr contains rules.
+#   Exit 0 always — informational only.
+# FAIL-OPEN: If rules/SessionStart/ missing, exits 0 silently.
+
+INPUT=$(cat)  # Consume stdin per hook protocol
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Plugin lives at SessionStart.d/system/ — go 2 levels up to reach hooks root
+HOOKS_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Load rules.sh for compose_rules()
+if [[ ! -f "$HOOKS_DIR/lib/rules.sh" ]]; then
+    exit 0
+fi
+source "$HOOKS_DIR/lib/rules.sh"
+
+# Locate REPO_ROOT if not already set by common.sh
+if [[ -z "${REPO_ROOT:-}" ]]; then
+    REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
+    export REPO_ROOT
+fi
+
+# Emit SessionStart-scoped rules to stderr
+RULES="$(compose_rules "SessionStart")"
+if [[ -n "$RULES" ]]; then
+    echo "=== SESSION START RULES ===" >&2
+    echo "$RULES" >&2
+    echo "===========================" >&2
+fi
+
+exit 0

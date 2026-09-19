@@ -1,0 +1,43 @@
+#!/bin/bash
+# Poster: automode.d/system/10-todo
+# Story: POSTER-TODO (%POSTER-TODO)
+#
+# Posts `todo_available` when there is work to take.
+#
+# DELETED, not reimplemented: .automode/10-todo-sig, and the
+# pre-check-then-watch split. Dedup belongs to the action gauntlet (todo.sig vs
+# seen_todo), which only works if there is exactly one implementation of it.
+
+set -uo pipefail
+
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/post.sh"
+
+[ -f .todo.json ] || exit 0
+command -v todo >/dev/null 2>&1 || exit 0
+export TODO_PROJECT_DIR="$PWD"
+
+# The only thing in this file that is about todos.
+automode_poster_message() {
+    local avail
+    avail="$(todo filter avail 2>/dev/null)"
+    # Post only when there is a GENUINELY takeable item — a line carrying an
+    # [avail] marker and a %id — excluding the legend row ("Status: [avail]=ready
+    # …"). `todo filter avail` prints help/legend boilerplate even when nothing is
+    # available, and on a deferred/blocked-only queue emits "No todos" or "No
+    # available work — is it time to work on these?"; none of that is real work.
+    # The old `[ "$avail" != "No todos" ]` check passed on that non-empty text and
+    # re-fired the Stop-hook nudge every cycle on correctly-parked queues, burning
+    # turns + weekly-limit budget colony-wide (the_management %135 / Spiral %52).
+    # Story: POSTER-TODO-NO-AVAIL-NUDGE (deferred/blocked-only re-fire, same class
+    # as the earlier 10-todo TODO-BLOCKED-ONLY-NO-NUDGE + the legend-row trap).
+    # A real item line is "[avail] [todo ] … %<id>"; the legend is "[avail]=ready"
+    # (no space after ]). Require an [avail] followed by whitespace AND a %id, so
+    # neither the legend nor the "No todos"/"No available work" text triggers a post.
+    printf '%s\n' "$avail" | grep -qE '\[avail\][[:space:]].*%[0-9]' || return 1
+    # `todo status` is what the agent should READ; `filter avail` only decides
+    # whether there is anything worth saying. PRINCIPLES #1: ask the tool for its
+    # own summary rather than assembling one here.
+    todo status 2>/dev/null
+}
+
+automode_post_main "${1:---once}" todo_available .

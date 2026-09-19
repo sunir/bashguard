@@ -1,0 +1,539 @@
+#!/bin/bash
+# Plugin: system-sync (Stop)
+# Syncs hook dispatchers and lib/ from system template on every session stop.
+#
+# Story: automode-reliable-stop
+# WHY: Fixes pushed to system/ propagate to all family members at runtime,
+#      not just when 'colony c' is next run. This keeps running agents current
+#      without requiring human intervention.
+#
+# WHAT GETS SYNCED:
+#   - Hook dispatcher files (Stop, PostToolUse, etc.) — always overwrite
+#   - lib/ directory (common.sh, stop/controller.sh, etc.) — always overwrite
+#   - [0-9][0-9]- prefixed plugins in .d/ dirs — system policy tier (synced)
+#
+# WHAT IS NEVER TOUCHED:
+#   - Plugins not following [0-9][0-9]- prefix — repo-specific, never synced
+#
+# NAMING CONVENTION:
+#   [0-9][0-9]- prefix = system policy (synced from system to all family repos)
+#   local/ subdir = repo-specific (lives only in that repo, never synced)
+#
+# EXIT: Always 0. This is maintenance, not a blocker.
+
+INPUT=$(cat)  # Consume stdin (passed by dispatcher, required protocol)
+
+# Locate repo root — set by common.sh if loaded, else derive from this script
+if [ -z "${REPO_ROOT:-}" ]; then
+    # Plugin lives at .claude/hooks/Stop.d/system/ — 4 levels up to repo root
+    REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+fi
+
+# Locate system hooks template.
+# The colony layout is: <colony-root>/{Spiral,system,cli,gates,...}
+# REPO_ROOT/../ gives us the colony root directory, so system is at REPO_ROOT/../system.
+#
+# SYSTEM_HOOKS_SIBLING is the source repo's own hooks dir — used ONLY for the
+# self-guard check below (detects "this repo IS colony/system"). It must stay
+# independent of where we actually sync FROM.
+if [ -n "${COLONY_ROOT:-}" ]; then
+    # When COLONY_ROOT set (e.g. tests), system is inside it
+    SYSTEM_HOOKS_SIBLING="$COLONY_ROOT/system/claude/hooks"
+else
+    SYSTEM_HOOKS_SIBLING="$REPO_ROOT/../system/claude/hooks"
+fi
+
+# Story: CORRECT-FLOW-SYNC
+# Sync FROM the deploy-checkpointed prod copy, not the source repo — source
+# can be mid-merge or syntactically broken between commits; prod only
+# advances on merge-to-main (2026-07-08 stop-hook disaster: a broken source
+# commit fanned out to all 15 member repos within one Stop cycle before this
+# fix). Same pattern already used for CLI (see CLI_PROD below).
+#
+# Deliberately NOT gated on COLONY_ROOT — COLONY_ROOT is set on every real
+# live session (07-repo-mentions, 10-cross-repo-guard, 06-staleness-check all
+# rely on it for unrelated cross-repo features), not just under test. Gating
+# prod-preference on it silently defeated this fix for every live session,
+# always falling back to the raw sibling checkout. Prod-vs-sibling must
+# depend only on whether a real prod checkpoint dir exists.
+# Story: SYSTEM-SYNC-COLONY (live repro: a merged fix never reached this
+# repo's own hooks dir despite landing on origin/main and the prod checkpoint)
+SYSTEM_PROD="${COLONY_SYSTEM_PROD:-$(eval echo ~claude)/prod/system}"
+if [ -d "$SYSTEM_PROD/claude/hooks" ]; then
+    SYSTEM_HOOKS="$SYSTEM_PROD/claude/hooks"
+else
+    SYSTEM_HOOKS="$SYSTEM_HOOKS_SIBLING"
+fi
+REPO_HOOKS="$REPO_ROOT/.claude/hooks"
+
+# Guard: system template must exist
+if [ ! -d "$SYSTEM_HOOKS" ]; then
+    exit 0
+fi
+
+# Guard: repo hooks dir must exist (it always should, but be safe)
+if [ ! -d "$REPO_HOOKS" ]; then
+    exit 0
+fi
+
+# Guard: never sync when this repo IS the system repo.
+# This happens when REPO_ROOT/../system resolves to REPO_ROOT itself.
+# Both the symlink case (.claude/ → system/claude/) and the dual-dir case
+# (.claude/ and claude/ coexist) are caught this way.
+# Deliberately checked against SYSTEM_HOOKS_SIBLING, not SYSTEM_HOOKS — the
+# sync source may now be the prod checkpoint, which never equals REPO_ROOT
+# even when this repo genuinely is colony/system.
+CANON_SYSTEM_REPO="$(cd "$SYSTEM_HOOKS_SIBLING/../.." 2>/dev/null && pwd -P)"
+CANON_REPO_ROOT="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P)"
+if [ "$CANON_SYSTEM_REPO" = "$CANON_REPO_ROOT" ]; then
+    exit 0
+fi
+# Legacy symlink check: .claude/ hooks dir resolves to system hooks dir.
+CANON_SYSTEM="$(cd "$SYSTEM_HOOKS_SIBLING" && pwd -P 2>/dev/null)"
+CANON_REPO="$(cd "$REPO_HOOKS" && pwd -P 2>/dev/null)"
+if [ "$CANON_SYSTEM" = "$CANON_REPO" ]; then
+    echo "WARNING: .claude/ resolves to system hooks directory — symlink detected." >&2
+    echo "  Fix: run 'scripts/migrate-claude-local $REPO_ROOT' to replace symlink with real directory." >&2
+    exit 0
+fi
+
+# Guard: refuse to sync into a destination that is itself a symlink, or a
+# destination ROOT (lib/, a .d/ dir, rules/, commands/, skills/) that
+# resolves outside REPO_ROOT. The 2026-07-08 disaster is believed to have
+# gone through exactly this path: a nested convenience symlink one level
+# below .claude/hooks (not caught by the top-level self-guard above, which
+# only catches the whole-REPO_HOOKS case) let this plugin's "always
+# overwrite" sync write synced content straight into the real system repo.
+# Story: CORRECT-FLOW-SYNC (hardening item a).
+CANON_REPO_ROOT_SAFE="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P)"
+_sync_root_is_safe() {
+    local root="$1"
+    if [ -L "$root" ]; then
+        echo "system-sync: refusing to sync — $root is a symlink" >&2
+        return 1
+    fi
+    if [ -e "$root" ]; then
+        local canon_root
+        canon_root="$(cd "$root" 2>/dev/null && pwd -P)" || { echo "system-sync: cannot resolve $root" >&2; return 1; }
+        case "$canon_root" in
+            "$CANON_REPO_ROOT_SAFE"|"$CANON_REPO_ROOT_SAFE"/*) ;;
+            *)
+                echo "system-sync: refusing to sync — $root resolves outside $REPO_ROOT ($canon_root)" >&2
+                return 1
+                ;;
+        esac
+    fi
+    return 0
+}
+
+# Guard: never copy a shell file that contains a conflict marker or fails
+# `bash -n`. A mid-merge or syntactically broken commit in system/ must not
+# fan out to every member repo within one Stop cycle — that's exactly what
+# smeared conflict markers across 15 repos on 2026-07-08.
+# Story: CORRECT-FLOW-SYNC (hardening item b).
+#
+# Only shell scripts are bash -n checked. Non-shell files (JSON, Markdown,
+# Python) legitimately fail bash -n and must not be blocked.
+# Story: SYSTEM-SYNC-NON-SHELL-SYNTAX-CHECK
+_is_shell_script() {
+    local f="$1"
+    case "$f" in *.sh) return 0 ;; esac
+    local shebang
+    shebang="$(head -1 "$f" 2>/dev/null)"
+    case "$shebang" in
+        '#!/bin/bash'*|'#!/bin/sh'*|'#!/usr/bin/env bash'*|'#!/usr/bin/env sh'*)
+            return 0 ;;
+    esac
+    return 1
+}
+_shell_file_is_safe_to_sync() {
+    local f="$1"
+    if grep -qE '^(<{7}( |$)|={7}$|>{7}( |$))' "$f" 2>/dev/null; then
+        echo "system-sync: refusing to sync $f — contains a conflict marker" >&2
+        return 1
+    fi
+    if _is_shell_script "$f" && ! bash -n "$f" 2>/dev/null; then
+        echo "system-sync: refusing to sync $f — fails bash -n syntax check" >&2
+        return 1
+    fi
+    return 0
+}
+
+# _stale_plugin_confirmed_removed <dotd_name> <plugin_name>
+# Story: SYSTEM-SYNC-PRUNE
+#
+# Live incident: this prune loop deleted PreToolUse.d/system/11-prod-write-guard
+# from a member repo while the file was, and remained, genuinely present and
+# committed in prod/system — the bare `[ ! -f "$src_sys_dir/$dest_name" ]`
+# check trusted a single filesystem glob against prod's WORKING TREE, which
+# this session independently observed going transiently inconsistent
+# (stale index artifacts) right after every merge-triggered `git reset --hard`
+# on that same checkout.
+#
+# Fix: before trusting a filesystem "missing" verdict, cross-check the
+# SOURCE REPO'S COMMITTED GIT TREE (git ls-tree HEAD) when SYSTEM_PROD is in
+# play. Git's object database is atomic — a transient working-tree glitch
+# can never make a committed file appear absent from `git ls-tree HEAD`.
+# Returns 0 (confirmed removed, safe to prune) only when the git check
+# agrees or can't be run at all (fail-open — the sibling-source fallback
+# path has no prod checkpoint to cross-check against, so it keeps the
+# original filesystem-only behavior rather than never pruning again).
+_stale_plugin_confirmed_removed() {
+    local dotd_name="$1" plugin_name="$2"
+    [ -n "${SYSTEM_PROD:-}" ] || return 0
+    git -C "$SYSTEM_PROD" rev-parse --git-dir >/dev/null 2>&1 || return 0
+    if git -C "$SYSTEM_PROD" ls-tree -r HEAD --name-only \
+        -- "claude/hooks/$dotd_name/system/$plugin_name" 2>/dev/null | grep -q .; then
+        echo "system-sync: skipped pruning $plugin_name — still tracked in $SYSTEM_PROD's HEAD (fs-only check would have deleted it)" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Sync dispatcher files (non-.d items at top level)
+for item in "$SYSTEM_HOOKS"/*; do
+    [ -e "$item" ] || continue
+    name="$(basename "$item")"
+
+    if [ -f "$item" ]; then
+        # Dispatcher file: always overwrite.
+        # Unlink first: dest may be owned by a different user (e.g. sunir owns
+        # the file but claude process writes it). Parent dir write permission
+        # allows unlink even across ownership.
+        dest="$REPO_HOOKS/$name"
+        if [ -L "$dest" ]; then
+            echo "system-sync: refusing to overwrite symlink at $dest" >&2
+            continue
+        fi
+        _shell_file_is_safe_to_sync "$item" || continue
+        rm -f "$dest"
+        cp "$item" "$dest"
+        chmod 555 "$dest"
+
+    elif [ -d "$item" ] && [ "$name" = "lib" ]; then
+        _sync_root_is_safe "$REPO_HOOKS/lib" || continue
+        # lib/: always sync all files inside, recursively (e.g. lib/stop/*.sh).
+        # A previous version only globbed "$item"/* (one level), so files nested
+        # in subdirs like lib/stop/ were silently never copied to any member repo —
+        # every Stop.d plugin sourcing lib/stop/*.sh (00-session-guard, 30-check-git,
+        # 50-todo, 28-stall-eject, 99-automode) fell back to fail-open behavior.
+        mkdir -p "$REPO_HOOKS/lib"
+        while IFS= read -r lib_file; do
+            rel="${lib_file#"$item"/}"
+            dest="$REPO_HOOKS/lib/$rel"
+            _shell_file_is_safe_to_sync "$lib_file" || continue
+            mkdir -p "$(dirname "$dest")"
+            rm -f "$dest"
+            cp "$lib_file" "$dest"
+            # Preserve the source's executable bit: most lib/ files are meant to be
+            # `source`d (444, read-only, exec bit irrelevant) but some (e.g.
+            # lib/stop/automode_worker.sh) are invoked directly as a subprocess and
+            # need +x. A blanket chmod 444 here silently broke automode_worker.sh
+            # the first time lib/stop/ ever actually synced (AUTOMODE-LIB-STOP-SYNC-GAP).
+            if [ -x "$lib_file" ]; then
+                chmod 555 "$dest"
+            else
+                chmod 444 "$dest"
+            fi
+        done < <(find "$item" -type f)
+
+    elif [ -d "$item" ] && [[ "$name" == *.d ]]; then
+        # .d/ plugin dirs: sync 0X- system policy plugins from system/ subdir.
+        # Plugins are organized: system/.d/system/0X-* → repo/.d/system/0X-*
+        # Never touch 5X- prefixed plugins (repo-specific) or local/ subdir.
+        src_sys_dir="$item/system"
+        dest_dir="$REPO_HOOKS/$name"
+        [ -d "$src_sys_dir" ] || continue  # Only sync if system has system/ subdir
+        _sync_root_is_safe "$dest_dir" || continue
+        mkdir -p "$dest_dir"  # Create .d/ dir if repo doesn't have it yet
+        dest_sys_dir="$dest_dir/system"
+        mkdir -p "$dest_sys_dir"
+        mkdir -p "$dest_dir/plugin"  # Plugin tier (managed by colony plugin system)
+        for plugin in "$src_sys_dir"/[0-9][0-9]-*; do
+            [ -f "$plugin" ] || continue
+            plugin_name="$(basename "$plugin")"
+            dest="$dest_sys_dir/$plugin_name"
+            _shell_file_is_safe_to_sync "$plugin" || continue
+            rm -f "$dest"
+            cp "$plugin" "$dest"
+            chmod 554 "$dest"  # read-only + executable (owner+group can execute, no one writes)
+        done
+
+        # Prune stale system/ plugins that no longer exist in the source.
+        # This handles renames: old name disappears from system/ → remove from repo.
+        # Cover full system range [0-9][0-9]-* but skip 5X- (tool-installed, never pruned).
+        for dest_plugin in "$dest_sys_dir"/[0-9][0-9]-*; do
+            [ -f "$dest_plugin" ] || continue
+            dest_name="$(basename "$dest_plugin")"
+            # 5X- prefixed plugins are tool-installed (e.g. todo, msg) — never touch them
+            [[ "$dest_name" =~ ^5[0-9]- ]] && continue
+            if [ ! -f "$src_sys_dir/$dest_name" ] && \
+               _stale_plugin_confirmed_removed "$name" "$dest_name"; then
+                rm -f "$dest_plugin"
+                echo "system-sync: removed stale system/$dest_name (no longer in system template)" >&2
+            fi
+        done
+
+        # Prune local/ files that are now byte-for-byte identical to system/ versions.
+        # These accumulate when plugins get promoted from local/ to system/. Once
+        # system/ is authoritative, the local/ copy is dead weight.
+        local_dir="$dest_dir/local"
+        if [ -d "$local_dir" ]; then
+            for local_file in "$local_dir"/*; do
+                [ -f "$local_file" ] || continue
+                local_name="$(basename "$local_file")"
+                sys_copy="$dest_sys_dir/$local_name"
+                if [ -f "$sys_copy" ] && diff -q "$local_file" "$sys_copy" >/dev/null 2>&1; then
+                    rm -f "$local_file"
+                    echo "system-sync: removed duplicate local/$local_name (identical to system/$local_name)" >&2
+                fi
+            done
+        fi
+
+        # Story: SYSTEM-SYNC-DOT-D-LIB-GAP -- a *.d/ tier's own lib/
+        # subdirectory (e.g. automode.d/lib/post.sh, sourced by every
+        # automode.d/system/10-* poster) was never reachable by this
+        # continuous in-session sync: only $item/system/[0-9][0-9]-*
+        # numbered plugins were walked above, never $item/lib/. Same bug
+        # class as AUTOMODE-LIB-STOP-SYNC-GAP (top-level lib/stop/, fixed
+        # once already), one directory over -- found by the_management
+        # auditing this week's propagation claims, confirmed live
+        # (automode.d/lib/post.sh stayed stale indefinitely on any repo
+        # that never went idle long enough for cupdate, which skips live
+        # repos permanently). Mirrors the top-level lib/ sync above:
+        # recursive, executable bit preserved from source.
+        src_dot_d_lib="$item/lib"
+        if [ -d "$src_dot_d_lib" ]; then
+            dest_dot_d_lib="$dest_dir/lib"
+            _sync_root_is_safe "$dest_dot_d_lib" || continue
+            mkdir -p "$dest_dot_d_lib"
+            while IFS= read -r dot_d_lib_file; do
+                rel="${dot_d_lib_file#"$src_dot_d_lib"/}"
+                dest="$dest_dot_d_lib/$rel"
+                _shell_file_is_safe_to_sync "$dot_d_lib_file" || continue
+                mkdir -p "$(dirname "$dest")"
+                rm -f "$dest"
+                cp "$dot_d_lib_file" "$dest"
+                if [ -x "$dot_d_lib_file" ]; then
+                    chmod 555 "$dest"
+                else
+                    chmod 444 "$dest"
+                fi
+            done < <(find "$src_dot_d_lib" -type f)
+        fi
+    fi
+done
+
+# --- Migrations ---
+# One-time structural changes, tracked by version number.
+# Increment CURRENT_MIGRATION when adding a new migration block below.
+CURRENT_MIGRATION=5
+MIGRATION_FILE="$REPO_HOOKS/.migration-version"
+_repo_migration=0
+[ -f "$MIGRATION_FILE" ] && _repo_migration="$(cat "$MIGRATION_FILE" 2>/dev/null || echo 0)"
+
+if [ "$_repo_migration" -lt "$CURRENT_MIGRATION" ] 2>/dev/null; then
+
+    # Migration 1: Remove flat-layout orphans from *.d/ roots.
+    # Before system/local subdir structure, [0-9][0-9]-* plugins lived directly
+    # in *.d/. Dispatchers no longer read the root — only system/ and local/.
+    # These files are dead weight; remove them.
+    if [ "$_repo_migration" -lt 1 ]; then
+        for _d_dir in "$REPO_HOOKS"/*.d; do
+            [ -d "$_d_dir" ] || continue
+            for _orphan in "$_d_dir"/[0-9][0-9]-*; do
+                [ -f "$_orphan" ] || continue
+                rm -f "$_orphan"
+                echo "system-sync: migration 1: removed flat-layout orphan $(basename "$_d_dir")/$(basename "$_orphan")" >&2
+            done
+        done
+    fi
+
+    # Migration 2: Re-run flat-layout orphan removal.
+    # todo/msg/issues claude setup kept re-installing flat-root plugins after
+    # migration 1. Now that those tools no longer install flat copies, this
+    # migration cleans up any orphans that accumulated since migration 1.
+    if [ "$_repo_migration" -lt 2 ]; then
+        for _d_dir in "$REPO_HOOKS"/*.d; do
+            [ -d "$_d_dir" ] || continue
+            for _orphan in "$_d_dir"/[0-9][0-9]-*; do
+                [ -f "$_orphan" ] || continue
+                rm -f "$_orphan"
+                echo "system-sync: migration 2: removed flat-layout orphan $(basename "$_d_dir")/$(basename "$_orphan")" >&2
+            done
+        done
+    fi
+
+    # Migration 3: Remove flat rules/ files that have been moved to lifecycle subdirs.
+    # Rules were reorganized into Stop/, SessionStart/, UserPromptSubmit/ subdirs.
+    # Flat copies (01-fajr.md, 05-hooks.md, 06-focusmode.md, 10-todo.md, 20-memory.md)
+    # are now dead weight; lifecycle-scoped subdirs are authoritative.
+    if [ "$_repo_migration" -lt 3 ]; then
+        _rules_dir="$REPO_ROOT/rules"
+        if [ -d "$_rules_dir" ]; then
+            for _flat_rule in 01-fajr.md 05-hooks.md 06-focusmode.md 10-todo.md 20-memory.md; do
+                _f="$_rules_dir/$_flat_rule"
+                if [ -f "$_f" ]; then
+                    rm -f "$_f"
+                    echo "system-sync: migration 3: removed flat rule $_flat_rule (moved to lifecycle subdir)" >&2
+                fi
+            done
+        fi
+    fi
+
+    # Migration 4: Remove stale Stop.d/system/10-critical-rule from all repos.
+    # 10-critical-rule was renamed to 10-rule in the system template. The old prune
+    # loop only covered 0[0-9]-* (00-09 range), so 10-critical-rule was never pruned.
+    # Both coexisted and double-printed rules on every stop. Now that the prune loop
+    # covers the full range, future renames auto-prune. This migration cleans up the
+    # specific stale file immediately.
+    if [ "$_repo_migration" -lt 4 ]; then
+        _stale="$REPO_HOOKS/Stop.d/system/10-critical-rule"
+        if [ -f "$_stale" ]; then
+            rm -f "$_stale"
+            echo "system-sync: migration 4: removed stale Stop.d/system/10-critical-rule (renamed to 10-rule)" >&2
+        fi
+    fi
+
+    # Migration 5: Remove flat lifecycle-subdir rules that have been moved to system/ tier.
+    # Rules were reorganized from rules/<HOOK>/*.md to rules/<HOOK>/system/*.md.
+    # The flat copies inside hook subdirs are now dead weight; system/ tier is authoritative.
+    if [ "$_repo_migration" -lt 5 ]; then
+        _rules_dir="$REPO_ROOT/rules"
+        if [ -d "$_rules_dir" ]; then
+            for _hook in Stop SessionStart UserPromptSubmit; do
+                _hook_dir="$_rules_dir/$_hook"
+                [ -d "$_hook_dir" ] || continue
+                # Remove flat *.md files directly in the hook subdir (not in tier subdirs)
+                for _flat_rule in "$_hook_dir"/[0-9]*.md; do
+                    [ -f "$_flat_rule" ] || continue
+                    rm -f "$_flat_rule"
+                    echo "system-sync: migration 5: removed flat hook rule $_hook/$(basename "$_flat_rule") (moved to system/ tier)" >&2
+                done
+            done
+        fi
+    fi
+
+    echo "$CURRENT_MIGRATION" > "$MIGRATION_FILE"
+fi
+
+# Sync system rules/ — lifecycle-scoped subdirs with tier layout.
+# Each hook subdir (Stop/, SessionStart/, UserPromptSubmit/) contains tier subdirs:
+#   system/  — synced from system repo (authoritative, always overwritten)
+#   plugin/  — managed by colony plugin system (not touched here)
+#   local/   — repo-specific overrides (never touched)
+# Flat root rules/ files are NOT overwritten (may be compiled, e.g. 00-critical-rule.md).
+SYSTEM_RULES="$SYSTEM_HOOKS/../rules"
+REPO_RULES="$REPO_ROOT/rules"
+if [ -d "$SYSTEM_RULES" ] && [ -d "$REPO_RULES" ]; then
+    # Sync lifecycle-scoped subdirs with tier layout
+    for hook_src in "$SYSTEM_RULES"/*/; do
+        [ -d "$hook_src" ] || continue
+        hook_name="$(basename "$hook_src")"
+        dest_hook="$REPO_RULES/$hook_name"
+        sys_src="$hook_src/system"
+        # Only sync if system source has a system/ tier subdir
+        if [ ! -d "$sys_src" ]; then
+            continue
+        fi
+        _sync_root_is_safe "$dest_hook" || continue
+        dest_sys="$dest_hook/system"
+        mkdir -p "$dest_sys"
+        mkdir -p "$dest_hook/plugin"  # Ensure plugin tier dir exists for future use
+        # Sync system/ tier files (always overwrite — system is authoritative)
+        for rule in "$sys_src"/[0-9]*.md; do
+            [ -f "$rule" ] || continue
+            dest="$dest_sys/$(basename "$rule")"
+            rm -f "$dest"
+            cp "$rule" "$dest"
+            chmod 444 "$dest"
+        done
+        # Prune system/ tier files that no longer exist in system template
+        for dest_rule in "$dest_sys"/[0-9]*.md; do
+            [ -f "$dest_rule" ] || continue
+            dest_name="$(basename "$dest_rule")"
+            if [ ! -f "$sys_src/$dest_name" ]; then
+                rm -f "$dest_rule"
+                echo "system-sync: removed stale rules/$hook_name/system/$dest_name" >&2
+            fi
+        done
+    done
+    # Sync flat root rules — add new files only (never overwrite compiled rules)
+    for rule in "$SYSTEM_RULES"/0[0-9]-*; do
+        [ -f "$rule" ] || continue
+        rule_name="$(basename "$rule")"
+        dest="$REPO_RULES/$rule_name"
+        [ -f "$dest" ] && continue  # Never overwrite existing (may be compiled)
+        cp "$rule" "$dest"
+    done
+fi
+
+# Sync .claude/commands/ — slash command templates.
+# All files in system commands/ are synced to member repos that have a commands/ dir.
+# System version is authoritative: member repos can add their own commands but
+# system-managed ones are always kept current.
+SYSTEM_CMDS="$SYSTEM_HOOKS/../commands"
+REPO_CMDS="$REPO_ROOT/.claude/commands"
+if [ -d "$SYSTEM_CMDS" ] && [ -d "$REPO_CMDS" ] && _sync_root_is_safe "$REPO_CMDS"; then
+    for cmd in "$SYSTEM_CMDS"/*; do
+        [ -f "$cmd" ] || continue
+        dest="$REPO_CMDS/$(basename "$cmd")"
+        rm -f "$dest"
+        cp "$cmd" "$dest"
+        chmod 444 "$dest"
+    done
+fi
+
+# Sync .claude/skills/ — system-managed skill files (coffee.md, etc.)
+# Only syncs if repo already has a skills/ dir. System version is authoritative.
+SYSTEM_SKILLS="$SYSTEM_HOOKS/../skills"
+REPO_SKILLS="$REPO_ROOT/.claude/skills"
+if [ -d "$SYSTEM_SKILLS" ] && [ -d "$REPO_SKILLS" ] && _sync_root_is_safe "$REPO_SKILLS"; then
+    for skill in "$SYSTEM_SKILLS"/*.md; do
+        [ -f "$skill" ] || continue
+        dest="$REPO_SKILLS/$(basename "$skill")"
+        rm -f "$dest"
+        cp "$skill" "$dest"
+        chmod 444 "$dest"
+    done
+fi
+
+# Provision missing settings/metadata.json and core/* files.
+# These are user-editable stubs — the helper creates them if missing but
+# never overwrites existing content. Covers members created before this
+# logic existed (Sysop, Alex, Brook, etc.) and any future members.
+PROVISION="$SYSTEM_HOOKS/../../scripts/provision-member-files"
+if [ -x "$PROVISION" ]; then
+    "$PROVISION" "$REPO_ROOT" >&2 || true
+fi
+
+# Post-sync healthcheck: validate this repo's config after sync.
+# Errors go to system/issues/ so they're visible across sessions.
+# Derived from SYSTEM_HOOKS (prod-aware), not REPO_ROOT/../system directly —
+# running healthcheck from a mid-merge source repo has the same failure mode
+# CORRECT-FLOW-SYNC fixed for the sync loop above.
+HEALTHCHECK="$SYSTEM_HOOKS/../../scripts/healthcheck"
+if [ -x "$HEALTHCHECK" ]; then
+    _repo_name="$(basename "$REPO_ROOT")"
+    _hc_output="$("$HEALTHCHECK" "$_repo_name" 2>&1)" || {
+        _issues_dir="$REPO_ROOT/../system/issues"
+        mkdir -p "$_issues_dir" 2>/dev/null
+        _ts="$(date -u +%FT%TZ)"
+        # Log each error line as a JSONL entry
+        echo "$_hc_output" | grep "ERROR:" | while IFS= read -r line; do
+            printf '{"ts":"%s","repo":"%s","source":"healthcheck","message":"%s"}\n' \
+                "$_ts" "$_repo_name" "$(printf '%s' "$line" | tr '"' "'")" \
+                >> "$_issues_dir/healthcheck.jsonl" 2>/dev/null
+        done
+    }
+fi
+
+# Background: update colony CLI from source repo's main branch.
+# COLONY_CLI_PROD env var overrides the default production path.
+# Silent, non-blocking — never delays the Stop hook.
+CLI_PROD="${COLONY_CLI_PROD:-$(eval echo ~claude)/prod/cli}"
+if [ -d "$CLI_PROD/.git" ]; then
+    (cd "$CLI_PROD" && git fetch origin main 2>/dev/null && git checkout main 2>/dev/null && git reset --hard origin/main 2>/dev/null) &
+fi
+
+exit 0

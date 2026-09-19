@@ -1,0 +1,10 @@
+#!/bin/bash
+# Plugin: compile-commands (SessionStart)
+# Story: colony-setup
+# Recompiles .claude/commands/*.template with live session context.
+# SESSION and CURRENT_SESSION_ID are only known at session start, so
+# compile-commands must run here (not just during colony setup).
+# Non-blocking — never prevents session from starting.
+INPUT=$(cat)
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+python3 "$REPO_ROOT/../system/scripts/compile-commands" "$REPO_ROOT" 2>&1 || true

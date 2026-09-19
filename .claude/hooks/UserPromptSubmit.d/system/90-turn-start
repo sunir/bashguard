@@ -1,0 +1,65 @@
+#!/bin/bash
+# Plugin: turn-start (UserPromptSubmit)
+# Story: turn-log-entries
+#
+# WHY: Writes a log entry to the session JSONL so turn boundaries are
+#      computable from the transcript without inference. TurnStart covers
+#      any external event that gives the agent something to respond to:
+#      user prompt, injected message, loop wakeup, etc.
+#
+# OUTPUT: Appends {"type":"log","event":"turn_start",...} to the JSONL.
+#         No stdout — advisory hooks must not inject noise into the prompt.
+
+INPUT=$(cat)
+
+TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+
+# Derive path from session_id + cwd if not provided directly
+if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
+    SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    [[ -z "$SESSION_ID" ]] && exit 0
+    CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+    [[ -z "$CWD" ]] && CWD="$PWD"
+    ESCAPED_CWD=$(printf '%s' "$CWD" | sed 's|/|-|g; s|_|-|g')
+    TRANSCRIPT_PATH="${HOME:-$(eval echo ~claude)}/.claude/projects/${ESCAPED_CWD}/${SESSION_ID}.jsonl"
+fi
+
+[[ -f "$TRANSCRIPT_PATH" ]] || exit 0
+
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+
+# Classify the trigger from prompt content
+TRIGGER=$(printf '%s' "$INPUT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+p = d.get('prompt', '')
+if '<colony:msg>' in p or 'MsgRead' in p:
+    print('msg_read')
+elif 'ZorkRead' in p or '<zork' in p.lower():
+    print('zork_read')
+elif 'IssuesRead' in p or '<issues' in p.lower():
+    print('issues_read')
+elif p.strip().startswith('<<autonomous'):
+    print('loop_wakeup')
+else:
+    print('user_prompt')
+" 2>/dev/null)
+TRIGGER="${TRIGGER:-user_prompt}"
+
+python3 - "$TRANSCRIPT_PATH" "$SESSION_ID" "$TRIGGER" 2>/dev/null <<'PYEOF'
+import json, sys, uuid
+from datetime import datetime, timezone
+path, session_id, trigger = sys.argv[1], sys.argv[2], sys.argv[3]
+entry = {
+    "type": "log",
+    "uuid": str(uuid.uuid4()),
+    "sessionId": session_id,
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "text": f"turn_start trigger={trigger}",
+    "data": {"event": "turn_start", "trigger": trigger},
+}
+with open(path, 'a') as f:
+    f.write(json.dumps(entry) + '\n')
+PYEOF
+
+exit 0

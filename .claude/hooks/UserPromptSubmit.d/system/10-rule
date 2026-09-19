@@ -1,0 +1,81 @@
+#!/bin/bash
+# Plugin: rule (UserPromptSubmit)
+# Story: composable-rules
+#
+# PURPOSE: Inject per-prompt rules before every Claude response.
+#   Reads rules/UserPromptSubmit/*.md — lifecycle-scoped prompt discipline.
+#
+# PROTOCOL: stdout contains rules (injected into prompt by dispatcher).
+#   Exit 0 always — informational only.
+# FAIL-OPEN: If rules/UserPromptSubmit/ missing, exits 0 silently.
+
+INPUT=$(cat)  # Consume stdin per hook protocol
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Plugin lives at UserPromptSubmit.d/system/ — go 2 levels up to reach hooks root
+HOOKS_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# OS abstraction layer (os_mtime for the 99-plan.md staleness check below). This
+# plugin runs as its own subprocess under the dispatcher (not sourced), so it
+# does not inherit os.sh via lib/common.sh; source it directly. Source-once
+# guarded. Story: system/stories/os-abstraction-layer.md (STORY-OS-ABSTRACTION).
+source "$HOOKS_DIR/lib/os.sh" 2>/dev/null || true
+
+# Load rules.sh for compose_rules()
+if [[ ! -f "$HOOKS_DIR/lib/rules.sh" ]]; then
+    exit 0
+fi
+source "$HOOKS_DIR/lib/rules.sh"
+
+# Locate REPO_ROOT if not already set by common.sh
+if [[ -z "${REPO_ROOT:-}" ]]; then
+    REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
+    export REPO_ROOT
+fi
+
+# Detect code task: only inject code-discipline rules when relevant.
+# Code-only rules (05-test-first, 30-heuristics-search) fire on code signals.
+# Always-rules (10-todo, 20-memory) fire unconditionally.
+PROMPT=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('prompt',''))" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+CODE_TASK=0
+if echo "$PROMPT" | grep -qE "(implement|write (a |the |some )?(code|test|function|class|script|module)|fix (the |a |this )?bug|debug|refactor|add (a |the )?feature|edit (the |a |this )?file|create (a |the |this )?(function|class|module|test)|how (do|should) (i|we) (implement|build|code|write|fix))"; then
+    CODE_TASK=1
+fi
+
+RULES_DIR="$REPO_ROOT/rules/UserPromptSubmit"
+if [[ ! -d "$RULES_DIR" ]]; then
+    exit 0
+fi
+
+OUTPUT=""
+for rule_file in "$RULES_DIR"/[0-9]*.md; do
+    [[ -f "$rule_file" ]] || continue
+    name="$(basename "$rule_file")"
+    # Code-only rules: only inject when prompt looks like a code task
+    case "$name" in
+        05-test-first.md|20-code-discipline.md|30-heuristics-search.md)
+            [[ $CODE_TASK -eq 1 ]] || continue
+            ;;
+    esac
+    OUTPUT+="$(cat "$rule_file")"$'\n'
+done
+
+# Session plan (99-plan.md) — staleness handled by rules.sh
+if [[ -f "$REPO_ROOT/rules/99-plan.md" ]]; then
+    # STORY-OS-ABSTRACTION: raw `stat -f` does not fail cleanly on Linux (prints a
+    # filesystem dump instead of erroring), corrupting this arithmetic —
+    # verified as an actual bash "syntax error in expression" on this host.
+    _plan_age=$(( $(date +%s) - $(os_mtime "$REPO_ROOT/rules/99-plan.md" 2>/dev/null || echo 0) ))
+    if [[ $_plan_age -lt 28800 ]]; then
+        OUTPUT+="$(cat "$REPO_ROOT/rules/99-plan.md")"$'\n'
+    fi
+fi
+
+if [[ -n "$OUTPUT" ]]; then
+    echo "<colony:rules>"
+    echo "<!-- Active instructions — follow these for this response -->"
+    echo "$OUTPUT"
+    echo "</colony:rules>"
+fi
+
+exit 0

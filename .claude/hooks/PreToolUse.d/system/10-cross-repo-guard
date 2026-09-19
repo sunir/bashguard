@@ -1,0 +1,125 @@
+#!/bin/bash
+# Plugin: 10-cross-repo-guard (PreToolUse)
+# Story: cross-repo-permissions
+#
+# Checks .permissions before allowing Write/Edit/Bash operations to foreign repos.
+# Fail-open: any error (missing tools, parse error) → exit 0 (allow).
+#
+# Protocol: PreToolUse exit 2 + stdout message → block tool call.
+#           exit 0 → allow.
+#
+# Reads:
+#   REPO_ROOT — current home repo (set by common.sh)
+#   tool_name — from stdin JSON
+#   tool_input.file_path / tool_input.command — from stdin JSON
+
+INPUT="$(cat)"
+
+# Load check_permissions from common.sh if not already sourced
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
+if [[ -f "$LIB_DIR/common.sh" ]]; then
+    # shellcheck source=../lib/common.sh
+    source "$LIB_DIR/common.sh" 2>/dev/null || true
+fi
+
+# check_permissions must be available; if not, fail-open
+type -t check_permissions >/dev/null 2>&1 || exit 0
+
+# Derive REPO_ROOT if not set (plugin lives at PreToolUse.d/system/ — 4 up)
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd -P 2>/dev/null || pwd)}"
+COLONY_ROOT="${COLONY_ROOT:-$(dirname "$REPO_ROOT")}"
+
+# Get agent name from settings/metadata.json
+AGENT_NAME=""
+if [[ -f "$REPO_ROOT/settings/metadata.json" ]]; then
+    AGENT_NAME="$(python3 -c "import json,sys; d=json.load(open('$REPO_ROOT/settings/metadata.json')); print(d.get('NAME','').lower())" 2>/dev/null || true)"
+fi
+[[ -z "$AGENT_NAME" ]] && exit 0  # unknown agent — fail-open
+
+# Parse tool name and input from JSON
+tool_name="$(printf '%s' "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null || true)"
+[[ -z "$tool_name" ]] && exit 0
+
+# Build list of paths to check
+paths=()
+case "$tool_name" in
+    Write|Edit|MultiEdit)
+        file_path="$(printf '%s' "$INPUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+inp=d.get('tool_input',{})
+print(inp.get('file_path', inp.get('path','')))
+" 2>/dev/null || true)"
+        [[ -n "$file_path" ]] && paths+=("$file_path")
+        ;;
+    Bash)
+        command="$(printf '%s' "$INPUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('tool_input',{}).get('command',''))
+" 2>/dev/null || true)"
+        if [[ -n "$command" ]]; then
+            # Find bash-decomposer in scripts/ (sibling of hooks/)
+            decomposer="$(cd "$REPO_ROOT/../system/scripts" 2>/dev/null && pwd)/bash-decomposer"
+            [[ -f "$decomposer" ]] || exit 0  # no decomposer — fail-open
+            while IFS= read -r p; do
+                [[ -n "$p" ]] && paths+=("$p")
+            done < <(printf '%s\n' "$command" | bash "$decomposer" 2>/dev/null || true)
+        fi
+        ;;
+    *)
+        exit 0  # not a write tool
+        ;;
+esac
+
+[[ ${#paths[@]} -eq 0 ]] && exit 0
+
+# Check each path for cross-repo writes
+home_canon="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P || echo "$REPO_ROOT")"
+
+for path in "${paths[@]}"; do
+    # Resolve to absolute
+    if [[ "$path" != /* ]]; then
+        path="$(pwd)/$path"
+    fi
+    path_canon="$(cd "$(dirname "$path")" 2>/dev/null && pwd -P || dirname "$path")/$(basename "$path")"
+
+    # Same-repo write — always allow
+    [[ "$path_canon" == "$home_canon"* ]] && continue
+
+    # Temp paths — always allow
+    [[ "$path_canon" == /tmp/* || "$path_canon" == "${TMPDIR:-/tmp}"* ]] && continue
+
+    # Find which colony repo this path belongs to
+    target_repo=""
+    for sibling in "$COLONY_ROOT"/*/; do
+        [[ -d "$sibling" ]] || continue
+        sibling_canon="$(cd "$sibling" 2>/dev/null && pwd -P || continue)"
+        if [[ "$path_canon" == "$sibling_canon"* ]]; then
+            target_repo="$sibling_canon"
+            break
+        fi
+    done
+
+    # Not a known colony repo — allow (conservative: only block known repos)
+    [[ -z "$target_repo" ]] && continue
+
+    # Check .permissions in target repo
+    if ! check_permissions "$target_repo" "$AGENT_NAME"; then
+        target_name="$(basename "$target_repo")"
+        echo "[CROSS-REPO BLOCKED] $AGENT_NAME denied write to $target_name ($path)" >&2
+        if [[ "$target_name" == "system" ]]; then
+            echo "[CROSS-REPO BLOCKED] You may not write to colony/system directly. Instead, create a worktree in a separate folder and modify that. Then \`msg send sysop\` that branch to review and merge into system."
+        else
+            echo "[CROSS-REPO BLOCKED] $target_name/.permissions denies access for $AGENT_NAME. To request access, ask $target_name to add 'allow $AGENT_NAME' to their .permissions file."
+        fi
+        exit 2
+    fi
+
+    # Allowed cross-repo write — log but don't block
+    target_name="$(basename "$target_repo")"
+    echo "[CROSS-REPO] $AGENT_NAME writing to $target_name — allowed by .permissions" >&2
+done
+
+exit 0

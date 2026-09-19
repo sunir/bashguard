@@ -1,0 +1,141 @@
+#!/bin/bash
+# Plugin: colony-session (SessionStart)
+# Writes session_id to .colony so the Stop hook can verify ownership.
+# Subagent sessions (Agent() spawned) get different session_ids and will be
+# skipped by the Stop automode worker — only the owning session runs automode relax.
+#
+# No-op if .colony doesn't exist (not a colony repo).
+
+INPUT=$(cat)
+[[ -f .colony ]] || exit 0
+
+PREV_SESSION_ID="$(grep '^session_id:' .colony 2>/dev/null | awk '{print $2}')"
+SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+[[ -n "$SESSION_ID" ]] || exit 0
+OWNER_PID="$(grep '^PID:' .colony 2>/dev/null | awk '{print $2}')"
+
+_pid_is_live() {
+    local pid="$1"
+    [[ -n "$pid" ]] || return 1
+
+    # SessionStart hooks often run as claude while .colony records the sunir/root
+    # launcher PID. kill -0 reports EPERM for live cross-user processes; ps -p
+    # tests existence without requiring signal permission.
+    ps -p "$pid" >/dev/null 2>&1 && return 0
+    kill -0 "$pid" 2>/dev/null
+}
+
+_is_codex_subagent_session() {
+    local sessions_dir="${HOME:-}/.codex/sessions"
+    [[ -n "$SESSION_ID" && -d "$sessions_dir" ]] || return 1
+
+    local jsonl
+    jsonl="$(find "$sessions_dir" -type f -name "*${SESSION_ID}.jsonl" 2>/dev/null | sort | tail -1)"
+    [[ -n "$jsonl" && -f "$jsonl" ]] || return 1
+
+    head -1 "$jsonl" | jq -e '
+        .type == "session_meta" and (
+            .payload.thread_source == "subagent"
+            or (.payload.source | type == "object" and has("subagent"))
+            or (.payload.agent_role // null) != null
+        )
+    ' >/dev/null 2>&1
+}
+
+# Return 0 if the given PID is an ancestor of this hook process.
+# Used to verify that this SessionStart is running under the colony harness,
+# not from an external agent (codex primary session, background script, etc.)
+# that happens to share the same cwd.
+_running_under_pid() {
+    local target="$1"
+    [[ -n "$target" ]] || return 1
+    local pid="$$"
+    local depth=0
+    while [[ $depth -lt 20 && -n "$pid" && "$pid" -gt 1 ]]; do
+        pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+        [[ -z "$pid" || "$pid" -eq 0 ]] && return 1
+        [[ "$pid" -eq "$target" ]] && return 0
+        depth=$((depth + 1))
+    done
+    return 1
+}
+
+# Codex subagents get full SessionStart hooks in the same cwd as their parent.
+# They must not claim .colony ownership, or the parent Stop hook sees a session
+# mismatch and lets automode fall through.
+if _is_codex_subagent_session; then
+    exit 0
+fi
+
+# External sessions (primary codex runs, background scripts) must not steal .colony
+# from the active claude harness. The PID: field in .colony is the harness PID.
+# If it's alive and this hook is NOT running under it, we're in a foreign process
+# tree — exit without updating.
+# Legitimate session transitions (same harness, new claude session after compact or
+# restart) run as descendants of the harness PID and pass this check.
+if [[ "$PREV_SESSION_ID" != "$SESSION_ID" && -n "$OWNER_PID" ]]; then
+    if _pid_is_live "$OWNER_PID" && ! _running_under_pid "$OWNER_PID"; then
+        exit 0
+    fi
+fi
+
+# New session owner: evict any inherited relax watcher tree from the prior owner.
+# Otherwise a live .automode/relax-pid from the previous session causes the next
+# automode wait to defer-if-active and exit 0 instead of blocking for this session.
+# Covers two cases: session changed (PREV != SESSION) AND first ownership (PREV empty).
+if [[ "$PREV_SESSION_ID" != "$SESSION_ID" ]]; then
+    AUTOMODE_EVENT_SESSION_ID="$SESSION_ID" automode-event session_changed "prev=${PREV_SESSION_ID:-none}" "new=${SESSION_ID}" 2>/dev/null || true
+    if [[ -f .automode/relax-pid ]]; then
+        RELAX_PID="$(cat .automode/relax-pid 2>/dev/null)"
+        if [[ -n "$RELAX_PID" ]] && kill -0 "$RELAX_PID" 2>/dev/null; then
+            kill -- -"${RELAX_PID}" 2>/dev/null || true
+        fi
+        rm -f .automode/relax-pid
+    fi
+    # Reset cycle counters — they're scoped to a single session.
+    # _repo_checkpoint (git HEAD + dirty + todos) and reason_sig persist across
+    # sessions if no commits/file changes happen, causing cycle_exceeded to fire
+    # on the first stop hook of a fresh session. New session = fresh count.
+    if [[ -f .automode/cycle || -f .automode/idle-cycle ]]; then
+        AUTOMODE_EVENT_SESSION_ID="$SESSION_ID" automode-event cycle_file_reset "reason=session_change" 2>/dev/null || true
+    fi
+    rm -f .automode/cycle .automode/idle-cycle
+fi
+
+# Update session_id and PID in-place, preserving other fields and original permissions.
+# Avoid mktemp+mv which would replace the file and inherit 600 (mktemp default).
+#
+# Story: COLONY-SESSION-PID
+# PID chain: harness (claude/codex) → dispatcher (bash) → this plugin (bash)
+# $PPID = dispatcher (short-lived, dies after SessionStart completes).
+# pscolony scans for the harness binary PID, not the dispatcher.
+# We need the harness PID = PPID of the dispatcher = grandparent of this process.
+# Walk up from $PPID until we find a 'claude' process or fall back to $PPID.
+#
+# Bug: ps -o comm= truncates to 15 chars on macOS; /var/db/ai/claude/.../claude
+# becomes /var/db/ai/claud which never matches "claude". Use ps -o args= (full
+# command path) and glob-match the known harness binaries.
+_harness_pid="$PPID"
+_walk_pid="$PPID"
+for _depth in 1 2 3 4 5; do
+    _walk_pid="$(ps -o ppid= -p "$_walk_pid" 2>/dev/null | tr -d ' ')"
+    [[ -z "$_walk_pid" || "$_walk_pid" -le 1 ]] && break
+    _walk_cmd="$(ps -o args= -p "$_walk_pid" 2>/dev/null | awk '{print $1}')"
+    if [[ "$_walk_cmd" == "claude" || "$_walk_cmd" == *"/claude" || \
+          "$_walk_cmd" == "codex"  || "$_walk_cmd" == *"/codex"  || \
+          "$_walk_cmd" == "node"   || "$_walk_cmd" == *"/node" ]]; then
+        _harness_pid="$_walk_pid"
+        break
+    fi
+done
+tmpfile="$(mktemp)"
+grep -v "^session_id:\|^PID:" .colony > "$tmpfile" 2>/dev/null || true
+printf 'PID: %s\nsession_id: %s\n' "$_harness_pid" "$SESSION_ID" >> "$tmpfile"
+# Write content back into the existing file (preserves inode + permissions)
+cat "$tmpfile" > .colony
+rm -f "$tmpfile"
+
+# Clear context warning flags so a new session starts fresh
+rm -f .automode/context-napped .automode/context-warn .automode/context-fill-fired 2>/dev/null || true
+
+exit 0

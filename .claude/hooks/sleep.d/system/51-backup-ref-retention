@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# backup-ref-retention (sleep.d plugin) — dry-run-only wrapper around
+# scripts/backup-ref-retention, run once per sleep, right after
+# 50-substrate-heartbeat creates this cycle's own fresh backup ref.
+#
+# Story: BACKUP-REF-RETENTION (the_management %112, escalated 2026-09-08)
+#
+# DELIBERATELY DRY-RUN ONLY, never --apply, on this first deploy. Colony-
+# wide there are 253,936 refs/backups/session-* refs; the_management's
+# explicit safety concern: "whatever N you pick deletes on the order of
+# a quarter-million refs on first run... the first run [should be]
+# observable... so that if the rule is wrong it is wrong about a hundred
+# refs rather than all of them." This plugin makes the retention plan
+# observable across real, live sleep cycles colony-wide BEFORE anything
+# ever actually deletes a ref — flipping to --apply is a deliberate,
+# separate follow-up once dry-run output has been reviewed.
+#
+# sleep-hooks (the dispatcher that runs this) does `"$plugin" 2>/dev/null`
+# -- it discards every sleep.d plugin's stderr. Writing the dry-run
+# report straight to stderr here would be silently thrown away, defeating
+# the entire point of an observable first pass. Logs to a file instead.
+
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$REPO_ROOT" || exit 0
+git rev-parse HEAD >/dev/null 2>&1 || exit 0
+
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)"
+[[ "$GIT_DIR" == */worktrees/* ]] && exit 0
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/../../../../scripts" && pwd 2>/dev/null)"
+RETENTION_SCRIPT="$SCRIPT_DIR/backup-ref-retention"
+[[ -x "$RETENTION_SCRIPT" ]] || exit 0
+
+mkdir -p "$REPO_ROOT/.hookstate"
+LOG="$REPO_ROOT/.hookstate/backup-ref-retention-dryrun.log"
+
+{
+    printf '=== %s ===\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    "$RETENTION_SCRIPT" "$REPO_ROOT" 2>&1
+} >> "$LOG" 2>/dev/null || true
+
+exit 0

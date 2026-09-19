@@ -1,0 +1,11 @@
+#!/bin/bash
+# Plugin: layout-lint (SessionStart)
+# Story: repo-layout-contract
+# Checks repo layout against .claude/layout.d/*.json manifests.
+# Non-blocking — warns to stderr only.
+INPUT=$(cat)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOKS_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
+COLONY_ROOT="${COLONY_ROOT:-$(cd "$REPO_ROOT/.." && pwd)}"
+exec "$COLONY_ROOT/system/scripts/layout-lint"

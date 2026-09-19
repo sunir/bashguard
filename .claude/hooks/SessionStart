@@ -1,0 +1,29 @@
+#!/bin/bash
+# Stop hook dispatcher
+#
+# Story: REAPER-OUTER-HOOK-ENTRYPOINT -- outer reaper wrapper. Real
+# dispatcher logic lives in SessionStart.body (this file's sibling). See
+# lib/hook-entrypoint.sh for why this split exists and what it protects
+# against.
+#
+# The "Stop hook dispatcher" line above is NOT a copy-paste leftover --
+# cli's Colony._is_colony_compatible() greps every repo's .claude/hooks/Stop
+# for that exact string to decide whether `colony <repo>` may start a
+# session there ("old hook format" otherwise). Confirmed live: the stub's
+# rewrite briefly broke this colony-wide (every repo with the new stub
+# reported "incompatible .claude/ directory") until this line was restored
+# here. Reported to cli as a fragile check (content-sniffing a dispatcher's
+# comments); this line is the immediate, in-lane fix.
+#
+# Deliberately NOT named HOOK_DIR: that's a load-bearing external-override
+# env var the dispatcher body reads to redirect plugin discovery (tests do
+# this) -- naming this the same thing would clobber a real caller-supplied
+# override before it ever reaches the body.
+_STUB_SELF_DIR="$(cd -- "$(dirname -- "$0")" && pwd -P)"
+ENTRYPOINT="$_STUB_SELF_DIR/lib/hook-entrypoint.sh"
+if [[ ! -f "$ENTRYPOINT" ]]; then
+    echo "FATAL: hook library missing: $ENTRYPOINT" >&2
+    echo "SessionStart.body cannot be reached without it -- blocking rather than silently allowing it." >&2
+    exit 2
+fi
+exec "$ENTRYPOINT" SessionStart "$@"

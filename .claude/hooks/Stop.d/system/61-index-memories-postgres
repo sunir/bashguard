@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""
+Plugin: index-memories-postgres (Stop)
+Story: memory-natural-recall
+
+WHY: transcript sync produces memories/*.memories.md files, but `memory recall`
+     queries postgres chunks table scoped to %.memory.md / %.memories.md.
+     Nothing connected write→postgres, so `memory recall` always returned empty.
+     This plugin upserts new memory files into postgres at every session stop so
+     recall works next wakeup without manual intervention.
+
+WHAT: Scans memories/*.memories.md for files not yet in postgres sources table,
+      chunks each by section (## headers), upserts source + chunks with FTS.
+
+FAIL-OPEN: any error → exit 0 (never blocks stop).
+"""
+import hashlib
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+# ── locate memories dir ────────────────────────────────────────────────────────
+REPO_ROOT = os.environ.get("REPO_ROOT", "")
+if not REPO_ROOT:
+    hook_dir = Path(__file__).resolve().parent
+    REPO_ROOT = str(hook_dir.parents[3])  # Stop.d/system/ → … → repo root
+
+memories_dir = Path(REPO_ROOT) / "memories"
+if not memories_dir.is_dir():
+    sys.exit(0)
+
+memory_files = sorted(
+    f for f in memories_dir.rglob("*.memories.md")
+    if f.is_file()
+) + sorted(
+    f for f in memories_dir.rglob("*.memory.md")
+    if f.is_file()
+)
+if not memory_files:
+    sys.exit(0)
+
+
+# ── check which files are already indexed ─────────────────────────────────────
+def psql(sql: str) -> str:
+    try:
+        r = subprocess.run(
+            ["psql", "-d", "memory", "-U", "claude", "--csv", "-c", sql],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+        return r.stdout if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def psql_exec(sql: str) -> bool:
+    try:
+        r = subprocess.run(
+            ["psql", "-d", "memory", "-U", "claude", "-c", sql],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+# Fetch all already-indexed source files with their stored content hashes
+indexed_raw = psql(
+    "SELECT source_file, file_id FROM sources "
+    "WHERE source_file LIKE '%.memory.md' OR source_file LIKE '%.memories.md';"
+)
+# path → stored_hash (empty string if parse fails)
+indexed: dict[str, str] = {}
+for line in indexed_raw.splitlines():
+    line = line.strip().strip('"')
+    if not line or line in ("source_file,file_id", "source_file"):
+        continue
+    parts = line.split(",", 1)
+    if len(parts) == 2:
+        indexed[parts[0].strip().strip('"')] = parts[1].strip().strip('"')
+    else:
+        indexed[parts[0].strip().strip('"')] = ""
+
+def needs_reindex(f: Path) -> bool:
+    path = str(f)
+    if path not in indexed:
+        return True  # new file
+    current_hash = hashlib.sha256(f.read_bytes()).hexdigest()
+    return current_hash != indexed[path]  # re-index if content changed
+
+new_files = [f for f in memory_files if needs_reindex(f)]
+if not new_files:
+    sys.exit(0)
+
+
+# ── chunk a memory file by ## sections ────────────────────────────────────────
+def chunk_file(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    # Split on ## section headers; keep each section as a chunk
+    sections = re.split(r"\n(?=##\s)", text)
+    chunks = []
+    for sec in sections:
+        sec = sec.strip()
+        if len(sec) < 40:
+            continue
+        chunks.append(sec)
+    # Fallback: paragraph split if no sections
+    if not chunks:
+        for para in re.split(r"\n{2,}", text):
+            para = para.strip()
+            if len(para) >= 40:
+                chunks.append(para)
+    return chunks
+
+
+# ── upsert each file ──────────────────────────────────────────────────────────
+def escape(s: str) -> str:
+    # Story: INDEX-MEMORIES-SQL-SAFE-ESCAPE (SEC-001)
+    # Strip null bytes: PostgreSQL text type rejects them; unstripped causes silent psql error.
+    # Single-quote escaping is correct for PG 9.0+ with standard_conforming_strings=on (default).
+    s = s.replace('\x00', '')
+    return s.replace("'", "''")
+
+
+for fpath in new_files:
+    try:
+        file_id = hashlib.sha256(fpath.read_bytes()).hexdigest()
+        src_path = escape(str(fpath))
+
+        # Upsert source row
+        ok = psql_exec(
+            f"INSERT INTO sources (source_file, file_id) "
+            f"VALUES ('{src_path}', '{file_id}') "
+            f"ON CONFLICT (source_file) DO UPDATE SET file_id = EXCLUDED.file_id, indexed_at = now();"
+        )
+        if not ok:
+            continue
+
+        # Fetch source id
+        src_id_raw = psql(f"SELECT id FROM sources WHERE source_file = '{src_path}';")
+        lines = [l.strip() for l in src_id_raw.splitlines() if l.strip() and l.strip() != "id"]
+        if not lines:
+            continue
+        src_id = lines[0]
+
+        # Delete old chunks for this source (in case of re-index)
+        psql_exec(f"DELETE FROM chunks WHERE source_id = {src_id};")
+
+        # Insert chunks
+        chunks = chunk_file(fpath)
+        for i, chunk_text in enumerate(chunks):
+            chunk_id = f"{file_id}:{i}"
+            ct = escape(chunk_text)
+            psql_exec(
+                f"INSERT INTO chunks (chunk_id, source_id, source_file, text, fts, metadata) "
+                f"VALUES ('{chunk_id}', {src_id}, '{src_path}', '{ct}', "
+                f"to_tsvector('english', '{ct}'), '{{}}') "
+                f"ON CONFLICT (chunk_id) DO NOTHING;"
+            )
+    except Exception:
+        continue  # fail-open per file
+
+sys.exit(0)

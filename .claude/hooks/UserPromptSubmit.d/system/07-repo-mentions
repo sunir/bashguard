@@ -1,0 +1,170 @@
+#!/bin/bash
+# Plugin: repo-mentions (UserPromptSubmit) — system-wide
+#
+# PURPOSE: When the user mentions a colony repo by name (or says "you"/"your"),
+#   surface usable hints: who you are, and how to talk to mentioned repos.
+#
+# RULES:
+#   - Self-name: prompt contains \b(you|your|you're|youre)\b (case-insensitive)
+#       → "You are $NAME."
+#   - Family member (^[A-Z][a-z]+ repo dir): mentioned EXPLICITLY, prefixed
+#       %name or @name (e.g. "%Alex", "@Alex") -- bare "Alex" does NOT match.
+#       → can `msg send <Name>` only (not a CLI)
+#   - Utility repo (^[a-z]\w* repo dir): mentioned EXPLICITLY, prefixed
+#       %name or @name (e.g. "%gates", "@gates") -- bare "gates" does NOT
+#       match. Story: REPO-MENTIONS-EXPLICIT-PREFIX -- ordinary utility repo
+#       names (msg, todo, story, model, ...) collide with common English
+#       words and other tool names, firing this advisory on nearly every
+#       prompt regardless of whether a colony repo was actually meant.
+#       → can `msg send <name>` OR `Bash(<name> --help)`
+#   - Alias: lazy short forms (e.g. "%mgmt" → "the_management") resolve to
+#       the canonical repo dir if it exists locally, then follow the rule
+#       above -- the alias itself also needs the explicit %/@ prefix.
+#   - Twin-repo host mention: "<repo>@<host>" or bare "@<host>" where <host> is
+#       a registered `msg remote` or this machine's own hostname
+#       → `msg send <repo-or-self>@<host> "Subject -- Body"` (real msg syntax)
+#       (already explicit via @ -- unaffected by the %/@ prefix requirement
+#       above, which is about the family/utility repo-NAME match only)
+#
+# OUTPUT: stdout advisory (added to prompt context). Empty if no triggers.
+# FAIL-OPEN: any error → exit 0 silently.
+
+INPUT=$(cat)
+command -v jq >/dev/null 2>&1 || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+
+PROMPT=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('prompt',''))" 2>/dev/null)
+[[ -z "$PROMPT" ]] && exit 0
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Prefer REPO_ROOT exported by the dispatcher (common.sh/setup_hook_env).
+# Fallback path traversal is wrong for nested .claude dirs (e.g. repo/bin/.claude/hooks/).
+if [[ -z "${REPO_ROOT:-}" ]]; then
+    REPO_ROOT="$(cd "$HOOK_DIR/../../../.." && pwd)"
+fi
+COLONY_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
+REPO_NAME="$(basename "$REPO_ROOT")"
+
+NAME=""
+if [[ -f "$REPO_ROOT/settings/metadata.json" ]]; then
+    NAME=$(jq -r '.NAME // empty' "$REPO_ROOT/settings/metadata.json" 2>/dev/null)
+fi
+[[ -z "$NAME" ]] && NAME="$REPO_NAME"
+
+SELF_HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null)"
+REMOTE_HOSTS=""
+if command -v msg >/dev/null 2>&1; then
+    REMOTE_HOSTS="$(msg remote list 2>/dev/null | awk '/ = /{print $1}')"
+fi
+
+python3 - "$PROMPT" "$COLONY_ROOT" "$REPO_NAME" "$NAME" "$SELF_HOST" "$REMOTE_HOSTS" <<'PYEOF'
+import os, re, shutil, sys
+
+prompt, colony_root, self_repo, name, self_host, remote_hosts_raw = sys.argv[1:7]
+
+try:
+    entries = [e for e in os.listdir(colony_root)
+               if os.path.isdir(os.path.join(colony_root, e)) and not e.startswith('.')]
+except OSError:
+    sys.exit(0)
+
+family = []   # [A-Z][a-z]+...
+utility = []  # [a-z]\w*
+for e in entries:
+    if e == self_repo:
+        continue
+    if re.match(r'^[A-Z][a-z]', e):
+        family.append(e)
+    elif re.match(r'^[a-z]', e):
+        utility.append(e)
+
+def mentioned(name, text):
+    # Story: REPO-MENTIONS-EXPLICIT-PREFIX -- require an explicit % or @
+    # immediately before the name. Bare word matching used to fire on any
+    # ordinary use of a word that also happens to be a colony repo dir name
+    # (msg, todo, story, model, gates, ...), which is most of them --
+    # basically every prompt got an advisory whether or not a repo was
+    # actually meant. The prefix makes the mention deliberate.
+    #
+    # Path-component exclusion no longer needed for the leading edge (a
+    # literal '%'/'@' immediately before the name can't appear mid-path the
+    # way a bare word boundary could), but the trailing edge still needs it:
+    # \b alone treats '/' as a non-word char, so '%qa/bar' would match 'qa'
+    # as a whole word. Negative lookahead for [/\w] keeps that excluded.
+    pattern = r'[%@]' + re.escape(name) + r'(?![/\w])'
+    return re.search(pattern, text) is not None
+
+def mentioned_plural(name, text):
+    # Story: REPO-MENTIONS-PLURAL-UTILITY -- utility repos are CLI tools, and
+    # the natural way to talk about one (e.g. "match %todos to the todo tool")
+    # is often the plural, which mentioned() alone never catches since it
+    # requires the exact repo dir name as its own word. Same %/@ prefix
+    # requirement as mentioned() -- see REPO-MENTIONS-EXPLICIT-PREFIX above.
+    pattern = r'[%@]' + re.escape(name) + r's(?![/\w])'
+    return re.search(pattern, text) is not None
+
+mentioned_family = [n for n in family if mentioned(n, prompt)]
+mentioned_utility = [n for n in utility if mentioned(n, prompt) or mentioned_plural(n, prompt)]
+
+# Lazy aliases: typing the alias means the canonical repo, if it exists locally.
+ALIASES = {"mgmt": "the_management"}
+entry_set = set(entries)
+for alias, canonical in ALIASES.items():
+    if canonical == self_repo or canonical not in entry_set:
+        continue
+    if mentioned(alias, prompt) and not mentioned(canonical, prompt):
+        if canonical in family and canonical not in mentioned_family:
+            mentioned_family.append(canonical)
+        elif canonical in utility and canonical not in mentioned_utility:
+            mentioned_utility.append(canonical)
+
+self_ref = re.search(r"\b(you|your|you're|youre)\b", prompt, re.IGNORECASE) is not None
+
+# Twin-repo host mentions: "<repo>@<host>" is valid `msg send` syntax already;
+# bare "@<host>" means this repo's own twin over there.
+known_hosts = {h for h in remote_hosts_raw.split() if h}
+if self_host:
+    known_hosts.add(self_host)
+
+twin_lines = []
+seen_twin = set()
+for m in re.finditer(r'([A-Za-z][\w-]*)?@([A-Za-z][\w-]*)\b', prompt):
+    target_name, host = m.group(1), m.group(2)
+    if host not in known_hosts or (target_name, host) in seen_twin:
+        continue
+    seen_twin.add((target_name, host))
+    target_name = target_name or self_repo
+    if host == self_host:
+        twin_lines.append(f"@{host} is this host — {target_name}@{host} is already local, no msg needed.")
+    else:
+        twin_lines.append(f"Twin repo mentioned ({target_name}@{host}): `msg send {target_name}@{host} \"Subject -- Body\"`.")
+
+if not (mentioned_family or mentioned_utility or self_ref or twin_lines):
+    sys.exit(0)
+
+lines = []
+if self_ref:
+    lines.append(f"You are {name}.")
+
+if mentioned_family:
+    fam = ", ".join(mentioned_family)
+    # Use the actual mentioned name in the example, not a <Name> placeholder.
+    ex = mentioned_family[0]
+    lines.append(f"Family member(s) mentioned ({fam}): use `msg send {ex} \"Subject -- Body\"`.")
+
+if mentioned_utility:
+    util = ", ".join(mentioned_utility)
+    # Only suggest Bash(name --help) for repos whose name is also an executable in PATH.
+    # Repos that are directories but not CLI commands get msg send only.
+    cli = [n for n in mentioned_utility if shutil.which(n) is not None]
+    ex = mentioned_utility[0]
+    if cli:
+        examples = " or ".join(f"`Bash({n} --help)`" for n in cli[:3])
+        lines.append(f"Utility repo(s) mentioned ({util}): try {examples}, or `msg send {ex}`.")
+    else:
+        lines.append(f"Utility repo(s) mentioned ({util}): use `msg send {ex} \"Subject -- Body\"`.")
+
+lines.extend(twin_lines)
+
+print("\n".join(lines))
+PYEOF

@@ -1,0 +1,51 @@
+#!/bin/bash
+# Plugin: stop-cycle-counter (Stop)
+# Story: STOP-CYCLE-COUNTER
+#
+# WHY: The colony monitor's Gantt must render in agent-time (stop-cycles),
+#      not wall-clock — "they don't experience time like humans do." No
+#      per-agent monotonic cycle counter existed anywhere in the colony.
+#      The only existing counter, 45-idle-pressure, RESETS on idle/session-
+#      start by design (it measures idle pressure, not elapsed agent-time),
+#      so it cannot drive a Gantt axis. This plugin is a completely separate
+#      counter — it does not read or write 45-idle-pressure's state.
+#
+# WHAT: increments .hookstate/cycle-total by exactly 1 every time this
+#      agent's Stop hook fires (one agent-turn = one cycle). NEVER resets —
+#      no SessionStart hook, no idle logic, nothing else touches this file.
+#      Per-agent: the counter lives in the repo's own .hookstate/, isolated
+#      from every other repo.
+#
+# FAIL-SAFE: no `set -e`/`set -u` — every fallible step defaults to a safe
+#      value on failure, and the final `exit 0` is unconditional. A counter
+#      is not worth a stuck/dead Stop hook (remember the lib/stop wipe).
+#
+# MIGRATION (Story: HOMEOSTAT-FOLD): this counter lived at .homeostat/
+# cycle-total before the fold. Every repo colony-wide has real accumulated
+# history there that monitor's Gantt depends on — a blind rename would
+# silently reset it to 0. One-time: if the new file doesn't exist yet but
+# the old one does, seed from it instead of starting fresh. Self-heals
+# colony-wide via 05-system-sync, no per-repo manual fix needed.
+#
+# EXIT: Always 0.
+
+mkdir -p .hookstate 2>/dev/null
+
+current=0
+if [ -f .hookstate/cycle-total ]; then
+    _raw="$(cat .hookstate/cycle-total 2>/dev/null | tr -d '[:space:]')"
+    case "$_raw" in
+        ''|*[!0-9]*) current=0 ;;
+        *) current="$_raw" ;;
+    esac
+elif [ -f .homeostat/cycle-total ]; then
+    _raw="$(cat .homeostat/cycle-total 2>/dev/null | tr -d '[:space:]')"
+    case "$_raw" in
+        ''|*[!0-9]*) current=0 ;;
+        *) current="$_raw" ;;
+    esac
+fi
+
+echo "$((current + 1))" > .hookstate/cycle-total 2>/dev/null
+
+exit 0

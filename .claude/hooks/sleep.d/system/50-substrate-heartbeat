@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# substrate-heartbeat — session-end backup ref for any colony repo.
+# Creates refs/backups/session-YYYYMMDD-HHMMSS pointing to HEAD.
+# If uncommitted WIP exists, also captures it via refs/backups/session-...-wip.
+# For non-secret repos with a configured origin: pushes backup refs.
+# For secret repos: local backup only, never pushed to remote.
+#
+# Story: SAFE-SUBSTRATE-HEARTBEAT (spiral@mill 2026-07-20)
+#
+# 5 non-negotiable guards:
+#   (1) Never stage vanished-tracked-file deletions
+#         → uses git stash create (read-only on index/tree) + git update-ref
+#         → never calls git add, git rm, or modifies the index
+#   (2) Never auto-commit to main
+#         → backup refs live at refs/backups/*, never on any branch
+#   (3) Never author commit message
+#         → git stash create uses git's own stash format; we author no messages
+#   (4) Skip origin push for repos in the_management/config/secret-repos
+#         → reads canonical list; secret repos get local backup ref only
+#   (5) Push to each repo's own configured remote only
+#         → reads 'git remote get-url origin'; never a shared destination
+#
+# Usage: substrate-heartbeat [<repo-root>]
+
+set -uo pipefail
+
+REPO_ROOT="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+cd "$REPO_ROOT" || exit 1
+
+# Guard: must be a git repo with at least one commit
+git rev-parse HEAD >/dev/null 2>&1 || exit 0
+
+# Skip git worktrees — they share objects with the primary repo; backing them
+# up independently doubles storage and creates ref namespace collisions.
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)"
+[[ "$GIT_DIR" == */worktrees/* ]] && exit 0
+
+# Locate canonical secret-repos list (imported, not hardcoded).
+# COLONY_ROOT: walk up from the repo root's parent — the colony is the parent dir.
+COLONY_ROOT="${COLONY_ROOT:-$(cd "$REPO_ROOT/.." && pwd)}"
+SECRET_LIST="${SECRET_LIST_OVERRIDE:-$COLONY_ROOT/the_management/config/secret-repos}"
+SECRET=" $(grep -vE '^\s*(#|$)' "$SECRET_LIST" 2>/dev/null | tr '\n' ' ') "
+
+REPO_NAME="$(basename "$REPO_ROOT")"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP_REF="refs/backups/session-$STAMP"
+
+# Guard (2)(3): create local backup ref pointing to HEAD.
+# git update-ref never commits, never touches any branch.
+git update-ref "$BACKUP_REF" HEAD
+printf '[heartbeat] %s: local backup → %s\n' "$REPO_NAME" "$BACKUP_REF" >&2
+
+# Guard (1): snapshot uncommitted WIP.
+# git stash create builds a stash OID from the current state without touching
+# the index or working tree. Returns empty string if nothing to snapshot.
+WIP_OID="$(git stash create 2>/dev/null || true)"
+if [[ -n "$WIP_OID" ]]; then
+    git update-ref "${BACKUP_REF}-wip" "$WIP_OID"
+    printf '[heartbeat] %s: WIP snapshot → %s-wip\n' "$REPO_NAME" "$BACKUP_REF" >&2
+fi
+
+# Guard (4): never push secret repos to remote origin.
+if printf '%s' "$SECRET" | grep -q " $REPO_NAME "; then
+    printf '[heartbeat] %s: secret repo — local backup only, no remote push\n' "$REPO_NAME" >&2
+    exit 0
+fi
+
+# Guard (5): push only to THIS repo's own configured remote.
+ORIGIN="$(git remote get-url origin 2>/dev/null || true)"
+if [[ -z "$ORIGIN" ]]; then
+    printf '[heartbeat] %s: no origin — local backup only\n' "$REPO_NAME" >&2
+    exit 0
+fi
+
+# Push backup ref. Non-fatal: local backup ref already exists.
+if git push origin "$BACKUP_REF" 2>/dev/null; then
+    printf '[heartbeat] %s: pushed %s to origin\n' "$REPO_NAME" "$BACKUP_REF" >&2
+else
+    printf '[heartbeat] %s: push failed (non-fatal) — local ref preserved\n' "$REPO_NAME" >&2
+fi
+
+if [[ -n "$WIP_OID" ]]; then
+    git push origin "${BACKUP_REF}-wip" 2>/dev/null || true
+fi

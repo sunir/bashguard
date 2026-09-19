@@ -1,0 +1,7 @@
+#!/bin/bash
+# Plugin: automode.message.d/10-todo
+# Shows next recommended todo when automode wakes due to todo change.
+command -v todo > /dev/null 2>&1 || exit 1
+echo "$1" | grep -q '10-todo' || exit 1
+export TODO_PROJECT_DIR="$PWD"
+todo next 2>/dev/null | head -5

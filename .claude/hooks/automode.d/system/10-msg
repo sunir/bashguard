@@ -1,0 +1,53 @@
+#!/bin/bash
+# Poster: automode.d/system/10-msg
+# Story: POSTER-MSG (%POSTER-MSG)
+#
+# Posts `msg_arrived` when there is mail to read. Was a blocking watcher that
+# emitted a line into merge-stdout's fifo; is now a poster that writes a durable
+# fact and returns.
+#
+# DELETED, not reimplemented:
+#   1. THE PRE-CHECK before the watch loop -- a lost-wakeup workaround. A signal
+#      posted before anyone waits is now the ordinary case.
+#   2. .automode/10-msg-sig -- dedup is the machine's (msg.sig vs seen_msg). A
+#      second copy of that rule drifts.
+#   3. The emit-a-line-and-exit-0 protocol.
+#
+# KEPT deliberately: the dual DM/channel parse and the refusal to trust `msg`'s
+# exit code (AUTOMODE-D-MSG-SIGNAL-RELIABILITY -- `msg status unread` exits
+# non-zero on a channel bell with zero unread DMs, which cycled automode forever).
+# That lesson is about `msg`, not about wakeups.
+
+set -uo pipefail
+
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/post.sh"
+
+[ -d .msg ] || exit 0
+command -v msg >/dev/null 2>&1 || exit 0
+
+automode_poster_message() {
+    local summary count message="" channel_summary channel_line
+
+    summary="$(msg status unread 2>&1)" || true
+    if [[ "$summary" =~ ^([0-9]+)[[:space:]]+unread ]]; then
+        count="${BASH_REMATCH[1]}"
+        if [[ "$count" -gt 0 ]]; then
+            message="New mail ($summary). Run: Bash(msg read unread)"
+        fi
+    fi
+
+    if [[ -z "$message" ]]; then
+        channel_summary="$(msg list unread 2>/dev/null)" || true
+        if printf '%s' "$channel_summary" | grep -qE '/[^[:space:]].*[1-9][0-9]* unread'; then
+            channel_line="$(printf '%s' "$channel_summary" \
+                | grep -E '/[^[:space:]].*[1-9][0-9]* unread' | head -1 | sed 's/^[[:space:]]*//')"
+            message="Unread channel messages ($channel_line). Run: Bash(msg list unread)"
+        fi
+    fi
+
+    printf '%s' "$message"
+}
+
+# Watches .msg/ the DIRECTORY, not .msg/inbox -- msg _save does unlink+recreate,
+# which breaks an inode-based watch on the file.
+automode_post_main "${1:---once}" msg_arrived .msg

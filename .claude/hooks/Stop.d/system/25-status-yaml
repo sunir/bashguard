@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Update .status.yaml with current agent state from automode + todo.
+
+Reads: .automode/goal-cycle (objective), .todo.json (taken items, blockers)
+Writes: .status.yaml (gitignored, machine-readable status for colony-registry)
+
+Story: STATUS-YAML-AGENT-STATE -- the waiting_user keyword heuristic below
+is a deliberate, honest stopgap (no structured field exists to record
+"blocked on a human specifically"), not a bug to harden with more keywords.
+
+Story: STATUS-YAML-PY39-ANNOTATION-COMPAT -- `str | None` (PEP 604) is
+evaluated at RUNTIME by default, not lazily, on Python < 3.10 -- a
+TypeError, not a SyntaxError, so `ast.parse` alone reports this file as
+clean while it genuinely crashes on import. #!/usr/bin/env python3
+resolves whatever's first on PATH: an interactive session's PATH
+usually finds a newer interpreter (homebrew, a venv), but a minimal
+PATH -- cron's, confirmed live on lizzy -- finds macOS's shipped
+/usr/bin/python3 (3.9.6) instead, which fails HERE, at plugin startup,
+before any of this file's own logic ever runs. `from __future__ import
+annotations` makes every annotation in this module lazy (stored as a
+string, never evaluated unless something explicitly introspects it),
+fixing this with no behavior change and protecting any annotation
+added here later.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPO = Path(os.environ.get("REPO_ROOT", "."))
+STATUS_FILE = REPO / ".status.yaml"
+
+
+def agent_name() -> str:
+    colony = REPO / ".colony"
+    if colony.exists():
+        for line in colony.read_text().splitlines():
+            if line.startswith("Member:"):
+                return line.split(":", 1)[1].strip()
+    return REPO.name
+
+
+def current_objective() -> str | None:
+    goal_f = REPO / ".automode" / "goal-cycle"
+    if goal_f.exists():
+        g = goal_f.read_text().strip()
+        if g:
+            return g[:200]
+    return None
+
+
+def current_status() -> str:
+    """Derive status from automode state and todos."""
+    am_cycle = (REPO / ".automode" / "cycle").exists()
+    am_relax_pid = REPO / ".automode" / "relax-pid"
+
+    # Check taken todos for blockers / waiting flags
+    todo_f = REPO / ".todo.json"
+    human_action = None
+    blockers = []
+
+    if todo_f.exists():
+        try:
+            data = json.loads(todo_f.read_text())
+            for item in data.get("todos", []):
+                if item.get("status") == "block":
+                    blockers.append(item.get("content", "?")[:100])
+                if item.get("status") == "taken":
+                    content = item.get("content", "")
+                    # Heuristic: if taken item mentions "waiting" or "blocked on Sunir"
+                    if any(kw in content.lower() for kw in ("waiting for sunir", "blocked on sunir", "needs sunir")):
+                        human_action = content[:150]
+        except Exception:
+            pass
+
+    if blockers or human_action:
+        return "waiting_user", human_action, blockers
+
+    if am_cycle:
+        return "working", None, []
+
+    return "idle", None, []
+
+
+def write_status():
+    name = agent_name()
+    objective = current_objective()
+    status_val, human_action, blockers = current_status()
+
+    lines = [
+        f"agent: {name}",
+    ]
+    if objective:
+        lines.append(f'objective: "{objective}"')
+    lines.append(f"status: {status_val}")
+    lines.append(f'updated: "{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}"')
+    if human_action:
+        lines.append(f'human_action: "{human_action}"')
+    else:
+        lines.append("human_action: null")
+    if blockers:
+        lines.append("blockers:")
+        for b in blockers:
+            lines.append(f'  - "{b}"')
+    else:
+        lines.append("blockers: []")
+
+    STATUS_FILE.write_text("\n".join(lines) + "\n")
+
+
+if __name__ == "__main__":
+    try:
+        write_status()
+    except Exception as e:
+        print(f"25-status-yaml: {e}", file=sys.stderr)
+    sys.exit(0)

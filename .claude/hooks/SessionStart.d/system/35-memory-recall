@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Plugin: memory-recall (SessionStart)
+# Story: memory-auto-surface
+# WHY: Inject relevant past session context at session start so Claude has
+#      memory before the first user message. Complement to /wakeup.
+# PROTOCOL: stdout injection (appears in initial context). Always exits 0.
+
+set -euo pipefail
+INPUT="${INPUT:-$(cat)}"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${REPO_ROOT:-}" ]]; then
+    REPO_ROOT="$(cd "$HOOK_DIR/../../../.." && pwd)"
+fi
+REPO_NAME="$(basename "$REPO_ROOT")"
+
+# Skip compaction restarts — compact-memory hook handles those
+SOURCE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('source',''))" 2>/dev/null || true)
+if [ "$SOURCE" = "compact" ]; then exit 0; fi
+
+RESULT=$(memory recall "$REPO_NAME recent work" 2>/dev/null || true)
+if [ -n "$RESULT" ]; then
+    echo "$RESULT"
+fi
+exit 0

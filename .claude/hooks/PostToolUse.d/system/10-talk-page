@@ -1,0 +1,38 @@
+#!/bin/bash
+# Plugin: talk-page (PostToolUse)
+#
+# PURPOSE: When the LLM reads a file, also surface its .talk.md sidecar if one
+#   exists. The sidecar is the agent's own notes about that file — separate from
+#   the file itself, written and maintained by the agent across sessions.
+#
+# SIDECAR NAMING: <file_path>.talk.md
+#   src/auth.py       →  src/auth.py.talk.md
+#   docs/spec.md      →  docs/spec.md.talk.md
+#
+# OUTPUT: Injected into Claude's context after the Read tool result, clearly
+#   labelled as a talk page so the agent knows it's their notes, not the file.
+#
+# FAIL-OPEN: Missing jq, wrong tool, no sidecar → exit 0 silently.
+
+INPUT="${INPUT:-$(cat)}"
+
+# Only fire on Read tool
+TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)"
+[[ "$TOOL_NAME" == "Read" ]] || exit 0
+
+FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
+[[ -z "$FILE_PATH" ]] && exit 0
+
+TALK_PAGE="${FILE_PATH}.talk.md"
+[[ -f "$TALK_PAGE" ]] || exit 0
+
+cat <<EOF
+---
+[talk page: $TALK_PAGE]
+This is your notes file for $(basename "$FILE_PATH") — not the file itself.
+Write your notes back here with: Edit("$TALK_PAGE", ...)
+
+$(cat "$TALK_PAGE")
+[end talk page]
+---
+EOF

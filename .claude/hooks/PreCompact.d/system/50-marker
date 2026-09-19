@@ -1,0 +1,20 @@
+#!/bin/bash
+# Plugin: marker (PreCompact)
+# Story: automode-reliable-stop, CONTEXT-NAP-CONTINUE-UNTIL-COMPACT
+# Creates .compact marker for Stop hook detection
+
+# Story: PRECOMPACT-MARKER-REPO-ROOT-DEPTH — was 3 levels (../../..), resolving
+# to $REPO/.claude instead of $REPO. Harmless for .compact (nothing reads it —
+# 20-compact-rotate/26-compact-wakeup use the harness's source=compact field
+# directly), but would have silently no-op'd the context-napped clear below.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+touch "$REPO_ROOT/.compact"
+
+# A real compaction just happened — context is freed, so it's legitimate for
+# context-fill warnings to fire again if usage climbs back up. Without this,
+# .automode/context-napped (set by /nap or /sleep) only ever cleared at the
+# next SessionStart, suppressing every context-fill nudge for the rest of
+# the session even across multiple compactions.
+rm -f "$REPO_ROOT/.automode/context-napped" "$REPO_ROOT/.automode/context-fill-fired" "$REPO_ROOT/.automode/context-warn" 2>/dev/null
+
+echo "PreCompact marker set" >&2

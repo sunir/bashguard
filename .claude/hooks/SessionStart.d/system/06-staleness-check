@@ -1,0 +1,103 @@
+#!/bin/bash
+# Plugin: staleness-check (SessionStart)
+# Detect when system source repo is behind origin/main and alert loudly.
+#
+# Story: STALENESS-DETECTION
+#
+# ROOT CAUSE (2026-07-07): lisbeth's system repo was 18 commits stale.
+# 05-system-sync copies FROM the local source, so all member repos silently
+# got stale hooks. Nothing failed loudly. This plugin makes drift LOUD.
+#
+# SCENARIOS:
+#   1. Behind origin/main (N > 0)  → emit alert, background git pull
+#   2. Current (N = 0)             → no output, exit 0
+#   3. FETCH_HEAD > 24h old        → background git fetch (refresh remote ref)
+#   4. System path not found       → fail-open, exit 0
+#   5. Not a git repo / no remote  → fail-open, exit 0
+#   6. Running inside system repo  → skip, exit 0
+#
+# EXIT: Always 0. Alert, never block.
+
+INPUT=$(cat)  # Consume stdin (hook protocol)
+
+# Locate REPO_ROOT — set by common.sh if loaded, else derive
+if [ -z "${REPO_ROOT:-}" ]; then
+    # Plugin lives at .claude/hooks/SessionStart.d/system/ — 4 levels up
+    REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+fi
+
+# Locate system source repo (same derivation as 05-system-sync)
+# COLONY_SYSTEM_STALENESS_REPO allows override for testing
+if [ -n "${COLONY_SYSTEM_STALENESS_REPO:-}" ]; then
+    SYSTEM_REPO="$COLONY_SYSTEM_STALENESS_REPO"
+elif [ -n "${COLONY_ROOT:-}" ]; then
+    SYSTEM_REPO="$COLONY_ROOT/system"
+else
+    SYSTEM_REPO="$REPO_ROOT/../system"
+fi
+
+# Resolve to real path for comparison
+_real_system="$(cd "$SYSTEM_REPO" 2>/dev/null && pwd)" || { exit 0; }
+_real_root="$(cd "$REPO_ROOT" 2>/dev/null && pwd)"
+
+# Guard 6: running inside the system repo itself — skip
+[ "$_real_root" = "$_real_system" ] && exit 0
+
+# Guard 4/5: system path must be a git repo
+[ -d "$_real_system/.git" ] || exit 0
+git -C "$_real_system" rev-parse HEAD >/dev/null 2>&1 || exit 0
+
+# Check FETCH_HEAD age — if >24h, trigger a background fetch so future
+# checks have a fresh remote ref.
+_fetch_head="$_real_system/.git/FETCH_HEAD"
+if [ -f "$_fetch_head" ]; then
+    _now="$(date +%s)"
+    # Get FETCH_HEAD mtime (macOS: stat -f %m; Linux: stat -c %Y).
+    # STALENESS-CHECK-LINUX: on GNU coreutils, `stat -f %m FILE` is
+    # filesystem-status mode (no FORMAT arg) — "%m" gets consumed as a
+    # second FILE operand, dumping a multi-line Inodes/Blocks report to
+    # STDOUT and exiting nonzero. The old `A 2>/dev/null || B 2>/dev/null`
+    # form only swallows stderr, and a failed command's already-printed
+    # stdout isn't discarded by `||` — so that garbage landed in _mtime
+    # AND the fallback's real value got appended after it, corrupting the
+    # arithmetic below on every Linux host. Using if/elif instead means
+    # each branch's assignment fully OVERWRITES _mtime rather than
+    # concatenating: the failing branch's garbage is simply replaced by
+    # the next branch's correct value, never combined with it.
+    if _mtime="$(stat -f %m "$_fetch_head" 2>/dev/null)"; then
+        :  # macOS: succeeded, _mtime already correct
+    elif _mtime="$(stat -c %Y "$_fetch_head" 2>/dev/null)"; then
+        :  # Linux: succeeded, _mtime already correct
+    else
+        _mtime=0
+    fi
+    _age=$(( _now - _mtime ))
+    if [ "$_age" -gt 86400 ]; then
+        # Story: STALENESS-DETECTION (Scenario 3)
+        git -C "$_real_system" fetch origin main --quiet 2>/dev/null &
+    fi
+fi
+
+# Count commits behind origin/main (uses cached remote-tracking ref — no network)
+_behind="$(git -C "$_real_system" rev-list HEAD..origin/main --count 2>/dev/null)" || exit 0
+[ -z "$_behind" ] && exit 0
+[ "$_behind" -eq 0 ] && exit 0
+
+# Story: STALENESS-DETECTION (Scenario 1) — stale, alert and self-heal
+printf '⚠ SYSTEM STALE: system repo %s commits behind origin/main — pulling\n' "$_behind" >&2
+printf 'Hooks propagated by 05-system-sync will be stale until pulled.\n' >&2
+printf 'Background: git -C %s pull origin main\n' "$_real_system" >&2
+
+# Background self-heal + cupdate integration (Story: STALENESS-DETECTION)
+# After pulling, call cupdate from the colony root to propagate fresh system
+# files to ALL member repos immediately, not just on their next Stop hook.
+# CUPDATE_CMD is overridable for tests; COLONY_ROOT defaults to parent of system repo.
+_colony_root="${COLONY_ROOT:-$(dirname "$_real_system")}"
+_cupdate="${CUPDATE_CMD:-cupdate}"
+(
+    git -C "$_real_system" pull origin main --ff-only --quiet 2>/dev/null && \
+    cd "$_colony_root" 2>/dev/null && \
+    "$_cupdate" 2>/dev/null
+) &
+
+exit 0

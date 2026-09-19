@@ -1,0 +1,105 @@
+#!/bin/bash
+# Auto-generated hook dispatcher for UserPromptSubmit
+# Type: informational - Plugins run but never block operations
+# Version: unknown (2026-02-28 18:48:17 UTC)
+#
+# WHAT THIS HOOK DOES:
+#   Runs all executable plugins in UserPromptSubmit.d/ directory in priority order
+#   Plugins receive JSON input via stdin
+#   Plugin exit codes determine behavior (see Exit Codes section below)
+#
+# DO NOT EDIT - Managed by: colony hook UserPromptSubmit generate
+#
+# PLUGIN ENVIRONMENT VARIABLES:
+#   HOOK_NAME    - Name of this hook (e.g., "UserPromptSubmit")
+#   PLUGIN_NAME  - Basename of plugin file (e.g., "10-pluginname")
+#   SESSION_ID   - Session identifier (from hook common.sh)
+#   INPUT        - JSON input from Claude Code (from hook common.sh)
+#
+# EXIT CODES:
+#   0 - Success (plugin ran without issues)
+#   1 - Error (logged to stderr, execution continues)
+#   2 - Block operation (behavior depends on hook type)
+
+# _source <path> <what breaks without it> — FAIL CLOSED, not open. A missing
+# library must be loud and block, not let `source` fail silently and the
+# next dependent call get treated as an ordinary decision (the exact blast
+# radius a wiped lib/ has — 2026-07-08 disaster). Defined identically at the
+# top of every dispatcher (Stop, PreToolUse, UserPromptSubmit, SessionStart,
+# SessionEnd, PreCompact) — has to be duplicated, since it's what loads
+# lib/common.sh itself, before anything shared can exist to call.
+_source() {
+    local path="$1" consequence="$2"
+    if [[ ! -f "$path" ]]; then
+        echo "FATAL: hook library missing: $path" >&2
+        echo "$consequence — blocking rather than silently allowing it." >&2
+        exit 2
+    fi
+    source "$path"
+}
+
+# Load common boilerplate: sets up PATH, INPUT, SESSION_ID
+_source "$(dirname "$0")/lib/common.sh" \
+    "SCRIPT_DIR/REPO_ROOT/guards cannot be established without it"
+setup_hook_env
+[[ "${SKIP_GUARDS:-}" == "1" ]] || check_hook_guards >/dev/null || exit 0  # message discarded -- this dispatcher just allows the stop
+
+HOOK_DIR="${HOOK_DIR:-$SCRIPT_DIR/UserPromptSubmit.d}"
+[[ ! -d "$HOOK_DIR" ]] && exit 0
+
+# Story: REAPER-DISPATCHER-INTEGRATION (gates PRD, %170) -- guard/auth-check
+# hooks get a short grace period per gates' guidance. Empty REAPER_CMD
+# (reaper unavailable) is fail-open: plugins run exactly as before.
+reaper_cmd_for 2000
+
+# Run plugins in priority order: system/ first, then plugin/, then local/
+# Plugins are organized in subdirectories:
+#   system/ — system-managed policy plugins (synced from system repo)
+#   plugin/ — optional plugins installed via colony plugin system (manifest.json)
+#   local/  — repo-specific plugins (never synced)
+for _subdir in system plugin local; do
+    _subdir_path="$HOOK_DIR/$_subdir"
+    [[ -d "$_subdir_path" ]] || continue
+
+    for plugin in "$_subdir_path"/*; do
+        [[ "$(basename "$plugin")" == .* ]] && continue  # Skip dotfiles
+        [[ -f "$plugin" ]] || continue
+
+        export HOOK_NAME="UserPromptSubmit"
+        export PLUGIN_NAME="$(basename "$plugin")"
+
+        # .md files: cat to stdout — injected as context into Claude's prompt
+        if [[ "$plugin" == *.md ]]; then
+            cat "$plugin"
+            continue
+        fi
+
+        [[ -x "$plugin" ]] || continue
+
+        # Capture stdout and stderr separately.
+        # Plugin stdout → dispatcher stdout (Claude Code reads this for prompt injection)
+        # Plugin stderr → dispatcher stderr (terminal display/logging, not injected)
+        _tmpout=$(mktemp)
+        _tmperr=$(mktemp)
+        export HOOK_PLUGIN_EFFECT="$(mktemp)"
+        echo "$INPUT" | "${REAPER_CMD[@]+"${REAPER_CMD[@]}"}" "$plugin" >"$_tmpout" 2>"$_tmperr"
+        EXIT_CODE=$?
+
+        _stdout=$(cat "$_tmpout")
+        _stderr=$(cat "$_tmperr")
+        rm -f "$_tmpout" "$_tmperr"
+
+        log_plugin_run "UserPromptSubmit" "$PLUGIN_NAME" "$EXIT_CODE" "${#_stdout}" "${#_stderr}" "$HOOK_PLUGIN_EFFECT"
+        rm -f "$HOOK_PLUGIN_EFFECT"; unset HOOK_PLUGIN_EFFECT
+        # 143 (128+SIGTERM) is reaper reporting cancellation, not a plugin
+        # failure -- must not be logged as one.
+        if [[ $EXIT_CODE -ne 0 ]] && [[ $EXIT_CODE -ne 143 ]]; then
+            log_hook_error "UserPromptSubmit" "$PLUGIN_NAME" "$EXIT_CODE" "$_stderr"
+        fi
+
+        [[ -n "$_stdout" ]] && echo "$_stdout"        # → injected into prompt
+        [[ -n "$_stderr" ]] && echo "$_stderr" >&2    # → terminal only
+    done
+done
+
+exit 0

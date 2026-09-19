@@ -1,0 +1,121 @@
+#!/bin/bash
+# Auto-generated hook dispatcher for PostToolUse
+# Type: informational - Plugins run but never block operations
+#
+# WHAT THIS HOOK DOES:
+#   Runs all executable plugins in PostToolUse.d/ directory in priority order
+#   Plugins receive JSON input via stdin
+#   Plugin exit codes determine behavior (see Exit Codes section below)
+#
+# DO NOT EDIT - Managed by: colony hook PostToolUse generate
+#
+# PLUGIN ENVIRONMENT VARIABLES:
+#   HOOK_NAME    - Name of this hook (e.g., "PostToolUse")
+#   PLUGIN_NAME  - Basename of plugin file (e.g., "10-pluginname")
+#   SESSION_ID   - Session identifier (from hook common.sh)
+#   INPUT        - JSON input from Claude Code (from hook common.sh)
+#
+# EXIT CODES:
+#   0 - Success (plugin ran without issues)
+#   1 - Error (logged to stderr, execution continues)
+#   2 - Block operation (behavior depends on hook type)
+
+# _source <path> <what breaks without it> — FAIL CLOSED, not open. A missing
+# library must be loud and block, not let `source` fail silently and the
+# next dependent call get treated as an ordinary decision (the exact blast
+# radius a wiped lib/ has — 2026-07-08 disaster). Defined identically at the
+# top of every dispatcher (Stop, PreToolUse, PostToolUse, UserPromptSubmit,
+# SessionStart, SessionEnd, PreCompact, SubagentStart, SubagentStop,
+# PlanModeStop) — has to be duplicated, since it's what loads lib/common.sh
+# itself, before anything shared can exist to call.
+_source() {
+    local path="$1" consequence="$2"
+    if [[ ! -f "$path" ]]; then
+        echo "FATAL: hook library missing: $path" >&2
+        echo "$consequence — blocking rather than silently allowing it." >&2
+        exit 2
+    fi
+    source "$path"
+}
+
+# Load common boilerplate: sets up PATH, INPUT, SESSION_ID
+_source "$(dirname "$0")/lib/common.sh" \
+    "SCRIPT_DIR/REPO_ROOT/guards cannot be established without it"
+setup_hook_env
+[[ "${SKIP_GUARDS:-}" == "1" ]] || check_hook_guards >/dev/null || exit 0  # message discarded -- this dispatcher just allows the stop
+
+HOOK_DIR="${HOOK_DIR:-$SCRIPT_DIR/PostToolUse.d}"
+[[ ! -d "$HOOK_DIR" ]] && exit 0
+
+# CONTEXT-INJECTION-JSON-CONTRACT (Story: POSTTOOLUSE-CONTEXT-INJECTION-BROKEN):
+# PostToolUse is NOT one of Claude Code's plain-stdout-injection exceptions
+# (only UserPromptSubmit/UserPromptExpansion/SessionStart get that). Plain
+# stdout here goes to the debug log only, silently discarded -- confirmed
+# live: 10-talk-page ran, produced real output (dispatcher log showed
+# stdout_len=324), and none of it reached Claude. The real contract is one
+# JSON object on stdout: {"hookSpecificOutput":{"hookEventName":
+# "PostToolUse","additionalContext":"..."}}. Plugins may still emit plain
+# text (nothing plugin-facing changes) -- this dispatcher accumulates it and
+# emits exactly ONE JSON envelope at the end, since multiple concatenated
+# JSON objects would not be valid input either.
+_context_accum=""
+_append_context() {
+    [[ -n "$1" ]] || return 0
+    [[ -n "$_context_accum" ]] && _context_accum+=$'\n\n'
+    _context_accum+="$1"
+}
+
+# Run plugins in priority order: system/ first, then plugin/, then local/
+# Plugins are organized in subdirectories:
+#   system/ — system-managed policy plugins (synced from system repo)
+#   plugin/ — optional plugins installed via colony plugin system (manifest.json)
+#   local/  — repo-specific plugins (never synced)
+for _subdir in system plugin local; do
+    _subdir_path="$HOOK_DIR/$_subdir"
+    [[ -d "$_subdir_path" ]] || continue
+
+    for plugin in "$_subdir_path"/*; do
+        [[ "$(basename "$plugin")" == .* ]] && continue  # Skip dotfiles
+        [[ -f "$plugin" ]] || continue
+
+        export HOOK_NAME="PostToolUse"
+        export PLUGIN_NAME="$(basename "$plugin")"
+
+        # .md files: static context, no execution
+        if [[ "$plugin" == *.md ]]; then
+            _append_context "$(cat "$plugin")"
+            continue
+        fi
+
+        [[ -x "$plugin" ]] || continue
+
+        # Capture stdout and stderr separately.
+        # Plugin stdout → accumulated into the final additionalContext JSON.
+        # Plugin stderr → dispatcher stderr (terminal display/logging only).
+        _tmpout=$(mktemp)
+        _tmperr=$(mktemp)
+        export HOOK_PLUGIN_EFFECT="$(mktemp)"
+        echo "$INPUT" | "$plugin" >"$_tmpout" 2>"$_tmperr"
+        EXIT_CODE=$?
+
+        _stdout=$(cat "$_tmpout")
+        _stderr=$(cat "$_tmperr")
+        rm -f "$_tmpout" "$_tmperr"
+
+        log_plugin_run "PostToolUse" "$PLUGIN_NAME" "$EXIT_CODE" "${#_stdout}" "${#_stderr}" "$HOOK_PLUGIN_EFFECT"
+        rm -f "$HOOK_PLUGIN_EFFECT"; unset HOOK_PLUGIN_EFFECT
+        if [[ $EXIT_CODE -ne 0 ]]; then
+            log_hook_error "PostToolUse" "$PLUGIN_NAME" "$EXIT_CODE" "$_stderr"
+        fi
+
+        _append_context "$_stdout"
+        [[ -n "$_stderr" ]] && echo "$_stderr" >&2    # → terminal only
+    done
+done
+
+if [[ -n "$_context_accum" ]]; then
+    jq -n --arg ctx "$_context_accum" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $ctx}}'
+fi
+
+exit 0

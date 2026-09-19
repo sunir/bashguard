@@ -1,0 +1,91 @@
+#!/bin/bash
+# Plugin: compact-rotate (SessionStart)
+# Story: transcript-size
+#
+# WHY: Transcripts grow to 100MB+ in long automode sessions. After compaction,
+#      everything before compact_boundary is dead weight. This hook archives
+#      the old transcript and starts a fresh one from the boundary forward.
+#
+# WHEN: Fires only on SessionStart with source=compact (auto or manual compaction).
+#
+# RESULT: New SESSION_ID.jsonl contains only: back-reference header + compact
+#         boundary entry + any messages since. Old transcript archived as
+#         SESSION_ID-archived-TIMESTAMP.jsonl in the same directory.
+
+set -euo pipefail
+
+INPUT="${INPUT:-$(cat)}"
+
+# Only act on compaction restarts
+SOURCE="$(printf '%s' "$INPUT" | jq -r '.source // ""')"
+[[ "$SOURCE" == "compact" ]] || exit 0
+
+TRANSCRIPT_PATH="$(printf '%s' "$INPUT" | jq -r '.transcript_path // ""')"
+[[ -f "$TRANSCRIPT_PATH" ]] || exit 0
+
+SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // ""')"
+TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+TRANSCRIPT_DIR="$(dirname "$TRANSCRIPT_PATH")"
+ARCHIVE_NAME="${SESSION_ID}-archived-${TIMESTAMP}.jsonl"
+ARCHIVE_PATH="${TRANSCRIPT_DIR}/${ARCHIVE_NAME}"
+
+# Find the last compact_boundary line index (0-based)
+COMPACT_IDX="$(python3 - "$TRANSCRIPT_PATH" <<'PYEOF'
+import sys, json
+path = sys.argv[1]
+idx = None
+with open(path) as f:
+    for i, line in enumerate(f):
+        try:
+            e = json.loads(line)
+            if e.get('subtype') == 'compact_boundary':
+                idx = i
+        except:
+            pass
+if idx is not None:
+    print(idx)
+PYEOF
+)"
+
+[[ -z "$COMPACT_IDX" ]] && exit 0
+
+# Count total lines and bytes before rotation
+TOTAL_LINES="$(wc -l < "$TRANSCRIPT_PATH")"
+TOTAL_BYTES="$(wc -c < "$TRANSCRIPT_PATH" | tr -d ' ')"
+KEPT_LINES=$(( TOTAL_LINES - COMPACT_IDX ))
+
+# Archive the full transcript
+cp "$TRANSCRIPT_PATH" "$ARCHIVE_PATH"
+
+# Overwrite transcript: back-reference header + compact_boundary onwards
+python3 - "$TRANSCRIPT_PATH" "$ARCHIVE_NAME" "$SESSION_ID" "$TIMESTAMP" "$COMPACT_IDX" <<'PYEOF'
+import sys, json
+from datetime import datetime, timezone
+
+transcript_path, archive_name, session_id, timestamp, compact_idx = sys.argv[1:]
+compact_idx = int(compact_idx)
+
+with open(transcript_path) as f:
+    lines = f.readlines()
+
+header = {
+    "type": "system",
+    "subtype": "transcript_rotated",
+    "sessionId": session_id,
+    "timestamp": timestamp,
+    "message": f"Transcript rotated after compaction. Prior session archived at: {archive_name}",
+    "archivedTranscript": archive_name,
+}
+
+with open(transcript_path, 'w') as f:
+    f.write(json.dumps(header) + '\n')
+    for line in lines[compact_idx:]:
+        f.write(line)
+PYEOF
+
+NEW_BYTES="$(wc -c < "$TRANSCRIPT_PATH" | tr -d ' ')"
+
+echo "Transcript rotated: ${TOTAL_BYTES} bytes → ${NEW_BYTES} bytes (archived: ${ARCHIVE_NAME})" >&2
+
+# Stdout is injected into Claude's context on SessionStart
+echo "Note: transcript rotated after compaction. Prior session: ${ARCHIVE_NAME} ($(( TOTAL_BYTES / 1024 / 1024 ))MB archived, $(( NEW_BYTES / 1024 ))KB active)."

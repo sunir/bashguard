@@ -1,0 +1,108 @@
+#!/bin/bash
+# Auto-generated hook dispatcher for SubagentStop
+# Type: informational - Plugins run but never block operations
+#
+# WHAT THIS HOOK DOES:
+#   Runs all executable plugins in SubagentStop.d/ directory in priority order
+#   Plugins receive JSON input via stdin
+#   Plugin exit codes determine behavior (see Exit Codes section below)
+#
+# DO NOT EDIT - Managed by: colony hook SubagentStop generate
+#
+# PLUGIN ENVIRONMENT VARIABLES:
+#   HOOK_NAME    - Name of this hook (e.g., "SubagentStop")
+#   PLUGIN_NAME  - Basename of plugin file (e.g., "10-pluginname")
+#   SESSION_ID   - Session identifier (from hook common.sh)
+#   INPUT        - JSON input from Claude Code (from hook common.sh)
+#
+# EXIT CODES:
+#   0 - Success (plugin ran without issues)
+#   1 - Error (logged to stderr, execution continues)
+#   2 - Block operation (behavior depends on hook type)
+
+# _source <path> <what breaks without it> — FAIL CLOSED, not open. A missing
+# library must be loud and block, not let `source` fail silently and the
+# next dependent call get treated as an ordinary decision (the exact blast
+# radius a wiped lib/ has — 2026-07-08 disaster). Defined identically at the
+# top of every dispatcher (Stop, PreToolUse, PostToolUse, UserPromptSubmit,
+# SessionStart, SessionEnd, PreCompact, SubagentStart, SubagentStop,
+# PlanModeStop) — has to be duplicated, since it's what loads lib/common.sh
+# itself, before anything shared can exist to call.
+_source() {
+    local path="$1" consequence="$2"
+    if [[ ! -f "$path" ]]; then
+        echo "FATAL: hook library missing: $path" >&2
+        echo "$consequence — blocking rather than silently allowing it." >&2
+        exit 2
+    fi
+    source "$path"
+}
+
+# Load common boilerplate: sets up PATH, INPUT, SESSION_ID
+_source "$(dirname "$0")/lib/common.sh" \
+    "SCRIPT_DIR/REPO_ROOT/guards cannot be established without it"
+setup_hook_env
+[[ "${SKIP_GUARDS:-}" == "1" ]] || check_hook_guards >/dev/null || exit 0  # message discarded -- this dispatcher just allows the stop
+
+# Input-field validation gate (mirrors HookEventOps.REQUIRED_VALID_FIELDS for
+# SubagentStop). A claimed field is not a guarantee -- reject an orphaned
+# SubagentStop (agent_type "", agent_transcript_path never written) BEFORE any
+# plugin runs, so no plugin has to defend against it. Story:
+# SUBAGENTSTOP-ORPHANED-EVENTS (upstream anthropics/claude-code#27423, #27755).
+# Restored here after system's dispatchers took precedence over cli's generated
+# ones (1e6e1cf) but lacked this gate, dropping it from 0/160 repos.
+#
+# Story: SUBAGENTSTOP-VALIDATOR-FAIL-LOUD (cli %136) -- the gate above is
+# `hook_field_nonempty ... || exit 0`. If common.sh is ever edited such
+# that these validators go missing (exactly what happened once already,
+# db0e37f's "strip trace printfs" pass deleted hook_field_nonempty
+# entirely instead of just its printfs), an undefined function 127s and
+# `|| exit 0` silently reads that as "orphaned event, allow" -- every
+# real SubagentStop gets dropped before any plugin runs, with zero
+# visible signal. Same fail-loud class as every other `_source` check in
+# this dispatcher: a missing piece of required infrastructure must
+# block loudly, not be silently reinterpreted as an ordinary decision.
+if ! declare -F hook_field_nonempty >/dev/null 2>&1 || ! declare -F hook_field_path_exists >/dev/null 2>&1; then
+    echo "FATAL: hook_field_nonempty/hook_field_path_exists missing from common.sh" >&2
+    echo "SubagentStop's orphaned-event gate cannot run without them -- blocking rather than silently allowing every event through." >&2
+    exit 2
+fi
+hook_field_nonempty agent_type || exit 0
+hook_field_path_exists agent_transcript_path || exit 0
+
+HOOK_DIR="${HOOK_DIR:-$SCRIPT_DIR/SubagentStop.d}"
+[[ ! -d "$HOOK_DIR" ]] && exit 0
+
+_run_plugin() {
+    local plugin="$1"
+    [[ "$(basename "$plugin")" == .* ]] && return  # Skip dotfiles
+    [[ -f "$plugin" ]] || return
+
+    export HOOK_NAME="SubagentStop"
+    export PLUGIN_NAME="$(basename "$plugin")"
+
+    # .md files: cat to stderr as static instructions (not executed)
+    if [[ "$plugin" == *.md ]]; then
+        cat "$plugin" >&2
+        return
+    fi
+
+    [[ -x "$plugin" ]] || return
+
+    export HOOK_PLUGIN_EFFECT="$(mktemp)"
+
+    OUTPUT=$(echo "$INPUT" | "$plugin" 2>&1)
+    EXIT_CODE=$?
+
+    log_plugin_run "SubagentStop" "$PLUGIN_NAME" "$EXIT_CODE" "${#OUTPUT}" "merged" "$HOOK_PLUGIN_EFFECT"
+
+    rm -f "$HOOK_PLUGIN_EFFECT"; unset HOOK_PLUGIN_EFFECT
+    [[ -n "$OUTPUT" ]] && echo "$OUTPUT" >&2
+}
+
+# system/ runs first (policy), then plugin/ (colony plugins), then local/ (user scripts)
+for plugin in "$HOOK_DIR/system"/*; do _run_plugin "$plugin"; done
+for plugin in "$HOOK_DIR/plugin"/*; do _run_plugin "$plugin"; done
+for plugin in "$HOOK_DIR/local"/*; do _run_plugin "$plugin"; done
+
+exit 0

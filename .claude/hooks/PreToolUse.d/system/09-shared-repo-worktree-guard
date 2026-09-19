@@ -1,0 +1,60 @@
+#!/bin/bash
+# PreToolUse guard — BLOCK branch-mutating git ops in a SHARED repo's MAIN working
+# directory. Enforces the no-collision rule in CODE: agents kept colliding in the one
+# shared ~/source/colony/system working dir (a checkout/merge racing another agent's
+# in-progress work fanned broken state out — a mechanism of the 2026-07-08 disaster),
+# and telling them "use a worktree" does not stick. This makes it impossible.
+#
+# Story: SHARED-REPO-WORKTREE
+# Install: system/claude/hooks/PreToolUse.d/system/09-shared-repo-worktree-guard
+# (owned by bashguard; deployed via system worktree). exit 2 = deny.
+set -uo pipefail
+
+INPUT="$(cat)"
+_jq(){ printf '%s' "$INPUT" | jq -r "$1" 2>/dev/null; }
+
+command -v jq >/dev/null 2>&1 || exit 0
+
+tool="$(_jq '.tool_name // empty')"
+[ "$tool" = "Bash" ] || exit 0
+cmd="$(_jq '.tool_input.command // empty')"
+[ -n "$cmd" ] || exit 0
+
+# Only branch-mutating git ops can collide. Read-only git (status/log/diff/fetch) is fine.
+printf '%s' "$cmd" | grep -qE \
+  'git[[:space:]]+([^|;&]*[[:space:]])?(checkout|switch|merge|rebase|cherry-pick|reset[[:space:]]+--hard|branch[[:space:]]+-[DfM])' \
+  || exit 0
+
+# Resolve CWD from payload or fall back to process CWD.
+cwd="$(_jq '.cwd // empty')"; cwd="${cwd:-$PWD}"
+[ -d "$cwd" ] || exit 0
+
+# Find the git repo root containing this CWD.
+root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || exit 0
+name="$(basename "$root")"
+
+# A worktree has a .git FILE (gitdir pointer); a main checkout has a .git DIRECTORY.
+# Work in a worktree is always allowed — that's the sanctioned path.
+[ -d "$root/.git" ] || exit 0
+
+# Shared = touched by multiple agents concurrently. Configurable via env.
+SHARED_REPOS="${COLONY_SHARED_REPOS:-system heuristics}"
+case " $SHARED_REPOS " in
+  *" $name "*)
+    cat >&2 <<EOF
+BLOCKED by shared-repo-worktree-guard: '$name' is a SHARED repo, and
+  $cmd
+in its MAIN working directory collides with other agents doing the same.
+A checkout/merge racing another agent fanned broken state colony-wide
+on 2026-07-08. Do it in an isolated worktree instead:
+
+  git worktree add $root/../worktrees/$name/\${USER:-me} -b \${USER:-me}-work origin/main
+  cd $root/../worktrees/$name/\${USER:-me}
+  # ... your edits + commits ...
+  # then merge to main (its post-merge hook checkpoints to ~/prod/$name)
+
+Read-only git in the shared dir is fine; branch-mutating git is not.
+EOF
+    exit 2 ;;
+esac
+exit 0

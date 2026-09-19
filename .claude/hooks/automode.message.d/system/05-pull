@@ -1,0 +1,13 @@
+#!/bin/bash
+# Plugin: automode.message.d/05-pull
+# Pulls fresh mail from registered remotes on wake (silent side-effect).
+# Runs before 10-msg so pulled messages appear in the unread list.
+# Only fires when .msg/inbox changes (not on channel wakes).
+echo "$1" | grep -q '10-msg' || exit 1
+command -v msg > /dev/null 2>&1 || exit 1
+[ -f .msg/remotes ] || exit 1
+# Pull each registered remote (reads agent mailboxes directly via SSH)
+while IFS="=" read -r name url; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    msg pull "$name" 2>/dev/null || true
+done < .msg/remotes

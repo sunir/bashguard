@@ -1,0 +1,56 @@
+#!/bin/bash
+# Plugin: track-children (SubagentStop)
+# Removes this subagent from children: [...] in .colony on completion.
+# Runs at priority 15 — before 20-automode-wakeup so state is consistent
+# when the wakeup fires.
+
+INPUT=$(cat)
+command -v jq >/dev/null 2>&1 || exit 0
+[[ -f .colony ]] || exit 0
+
+AGENT_ID="$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null)"
+[[ -n "$AGENT_ID" ]] || exit 0
+
+COLONY_AGENT_ID="$AGENT_ID" \
+python3 - .colony <<'PYEOF'
+import json, os, re, sys
+
+colony_path = sys.argv[1]
+agent_id   = os.environ.get("COLONY_AGENT_ID", "")
+
+if not agent_id:
+    sys.exit(0)
+
+try:
+    with open(colony_path) as f:
+        content = f.read()
+except OSError:
+    sys.exit(0)
+
+m = re.search(r'^children:\s*(.+)$', content, re.MULTILINE)
+if not m:
+    sys.exit(0)
+
+try:
+    children = json.loads(m.group(1))
+except (json.JSONDecodeError, ValueError):
+    sys.exit(0)
+
+before = len(children)
+children = [c for c in children if c.get("id") != agent_id]
+
+if len(children) == before:
+    sys.exit(0)  # Not found — nothing to do
+
+if children:
+    new_line = "children: " + json.dumps(children, separators=(",", ":"))
+    content = re.sub(r'^children:.*$', new_line, content, flags=re.MULTILINE)
+else:
+    # No children left — remove the line entirely
+    content = re.sub(r'^children:[^\n]*\n?', '', content, flags=re.MULTILINE)
+
+with open(colony_path, 'w') as f:
+    f.write(content)
+PYEOF
+
+exit 0

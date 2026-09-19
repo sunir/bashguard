@@ -1,0 +1,135 @@
+#!/bin/bash
+# Auto-generated hook dispatcher for PlanModeStop
+# Type: informational - Plugins run but never block operations
+# Registered in settings.json as: SubagentStop{matcher:"Plan"} — PlanModeStop
+# is a logical name (its own dispatcher FILE, not its own Claude Code hook
+# event); cli/src/HookEventOps.py's _register_in_settings() and
+# Colony._generate_settings_json() both translate it to the SubagentStop key
+# with matcher "Plan" when writing settings.json. Do not register "PlanModeStop"
+# as a literal top-level hooks key — Claude Code doesn't recognize it.
+#
+# WHAT THIS HOOK DOES:
+#   Runs all executable plugins in PlanModeStop.d/ directory in priority order
+#   Plugins receive JSON input via stdin
+#   Plugin exit codes determine behavior (see Exit Codes section below)
+#
+# DO NOT EDIT - Managed by: colony hook PlanModeStop generate
+#
+# PLUGIN ENVIRONMENT VARIABLES:
+#   HOOK_NAME    - Name of this hook (e.g., "PlanModeStop")
+#   PLUGIN_NAME  - Basename of plugin file (e.g., "10-pluginname")
+#   SESSION_ID   - Session identifier (from hook common.sh)
+#   INPUT        - JSON input from Claude Code (from hook common.sh)
+#
+# EXIT CODES:
+#   0 - Success (plugin ran without issues)
+#   1 - Error (logged to stderr, execution continues)
+#   2 - Block operation (behavior depends on hook type)
+
+# _source <path> <what breaks without it> — FAIL CLOSED, not open. A missing
+# library must be loud and block, not let `source` fail silently and the
+# next dependent call get treated as an ordinary decision (the exact blast
+# radius a wiped lib/ has — 2026-07-08 disaster). Defined identically at the
+# top of every dispatcher (Stop, PreToolUse, PostToolUse, UserPromptSubmit,
+# SessionStart, SessionEnd, PreCompact, SubagentStart, SubagentStop,
+# PlanModeStop) — has to be duplicated, since it's what loads lib/common.sh
+# itself, before anything shared can exist to call.
+_source() {
+    local path="$1" consequence="$2"
+    if [[ ! -f "$path" ]]; then
+        echo "FATAL: hook library missing: $path" >&2
+        echo "$consequence — blocking rather than silently allowing it." >&2
+        exit 2
+    fi
+    source "$path"
+}
+
+# Load common boilerplate: sets up PATH, INPUT, SESSION_ID
+_source "$(dirname "$0")/lib/common.sh" \
+    "SCRIPT_DIR/REPO_ROOT/guards cannot be established without it"
+setup_hook_env
+[[ "${SKIP_GUARDS:-}" == "1" ]] || check_hook_guards >/dev/null || exit 0  # message discarded -- this dispatcher just allows the stop
+
+# Input-field validation gate (mirrors HookEventOps.REQUIRED_VALID_FIELDS for
+# PlanModeStop). A claimed field is not a guarantee -- reject an orphaned event
+# (agent_type "", agent_transcript_path never written) BEFORE any plugin runs.
+# Story: SUBAGENTSTOP-ORPHANED-EVENTS (upstream anthropics/claude-code#27423, #27755).
+#
+# Story: SUBAGENTSTOP-VALIDATOR-FAIL-LOUD (cli %136) -- see SubagentStop's
+# matching comment. A missing validator here must block loudly (exit 2),
+# not silently 127 into `|| exit 0` and drop every real PlanModeStop
+# event before any plugin runs.
+if ! declare -F hook_field_nonempty >/dev/null 2>&1 || ! declare -F hook_field_path_exists >/dev/null 2>&1; then
+    echo "FATAL: hook_field_nonempty/hook_field_path_exists missing from common.sh" >&2
+    echo "PlanModeStop's orphaned-event gate cannot run without them -- blocking rather than silently allowing every event through." >&2
+    exit 2
+fi
+hook_field_nonempty agent_type || exit 0
+hook_field_path_exists agent_transcript_path || exit 0
+
+HOOK_DIR="${HOOK_DIR:-$SCRIPT_DIR/PlanModeStop.d}"
+[[ ! -d "$HOOK_DIR" ]] && exit 0
+
+# CONTEXT-INJECTION-JSON-CONTRACT (Story: POSTTOOLUSE-CONTEXT-INJECTION-BROKEN):
+# PlanModeStop registers as SubagentStop{matcher:"Plan"}, and SubagentStop's
+# contract sends plain stderr on a normal exit to the debug log only -- not
+# to Claude, not even to the user. 00-cp-to-specs.md's whole job is
+# delivering instructions to Claude after a plan is approved; cat'ing it to
+# stderr never actually did that (the earlier "confirmed working" claim only
+# proved the content printed when the dispatcher was run directly, not that
+# Claude ever saw it). Real contract: one JSON object on stdout,
+# {"hookSpecificOutput":{"hookEventName":"SubagentStop","additionalContext":
+# "..."}} -- hookEventName is the REGISTERED event (SubagentStop), not the
+# logical name, since that's what Claude Code's dispatch actually sees.
+_context_accum=""
+_append_context() {
+    [[ -n "$1" ]] || return 0
+    [[ -n "$_context_accum" ]] && _context_accum+=$'\n\n'
+    _context_accum+="$1"
+}
+
+_run_plugin() {
+    local plugin="$1"
+    [[ "$(basename "$plugin")" == .* ]] && return  # Skip dotfiles
+    [[ -f "$plugin" ]] || return
+
+    export HOOK_NAME="PlanModeStop"
+    export PLUGIN_NAME="$(basename "$plugin")"
+
+    # .md files: static context, no execution
+    if [[ "$plugin" == *.md ]]; then
+        _append_context "$(cat "$plugin")"
+        return
+    fi
+
+    [[ -x "$plugin" ]] || return
+
+    export HOOK_PLUGIN_EFFECT="$(mktemp)"
+
+    local _tmpout _tmperr _stdout _stderr exit_code
+    _tmpout=$(mktemp)
+    _tmperr=$(mktemp)
+    echo "$INPUT" | "$plugin" >"$_tmpout" 2>"$_tmperr"
+    exit_code=$?
+    _stdout=$(cat "$_tmpout")
+    _stderr=$(cat "$_tmperr")
+    rm -f "$_tmpout" "$_tmperr"
+
+    log_plugin_run "PlanModeStop" "$PLUGIN_NAME" "$exit_code" "${#_stdout}" "${#_stderr}" "$HOOK_PLUGIN_EFFECT"
+
+    rm -f "$HOOK_PLUGIN_EFFECT"; unset HOOK_PLUGIN_EFFECT
+    _append_context "$_stdout"
+    [[ -n "$_stderr" ]] && echo "$_stderr" >&2    # → terminal/debug-log only
+}
+
+# system/ runs first (policy), then plugin/ (colony plugins), then local/ (user scripts)
+for plugin in "$HOOK_DIR/system"/*; do _run_plugin "$plugin"; done
+for plugin in "$HOOK_DIR/plugin"/*; do _run_plugin "$plugin"; done
+for plugin in "$HOOK_DIR/local"/*; do _run_plugin "$plugin"; done
+
+if [[ -n "$_context_accum" ]]; then
+    jq -n --arg ctx "$_context_accum" \
+        '{hookSpecificOutput: {hookEventName: "SubagentStop", additionalContext: $ctx}}'
+fi
+
+exit 0

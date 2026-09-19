@@ -1,0 +1,34 @@
+#!/bin/bash
+# Plugin: brainstorm-surface (wakeup.d)
+# Story: SLEEP-WAKEUP-HOOKS
+#
+# Surface the 2 most recent brainstorm sessions from wiki/brainstorming.md
+# at wakeup time so ideas from prior sessions stay visible.
+#
+# Output goes to stderr → appears in UPS context at session start.
+# Fail-open: missing file, parse errors → exit 0 silently.
+
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+BRAINSTORM="$REPO_ROOT/wiki/brainstorming.md"
+
+[[ -f "$BRAINSTORM" ]] || exit 0
+
+# Extract last 2 "## Brainstorm" sections
+output=$(awk '
+    /^## Brainstorm/ { count++ }
+    count >= 1 { lines[NR] = $0; last_start[count] = NR }
+    END {
+        if (count < 1) exit
+        start = (count >= 2) ? last_start[count-1] : last_start[1]
+        for (i = start; i <= NR; i++) print lines[i]
+    }
+' "$BRAINSTORM" 2>/dev/null | head -40)
+
+[[ -z "$output" ]] && exit 0
+
+cat >&2 <<EOF
+=== RECENT BRAINSTORM THREADS ===
+$output
+=================================
+EOF
+exit 0

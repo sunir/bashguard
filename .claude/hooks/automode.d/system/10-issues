@@ -1,0 +1,39 @@
+#!/bin/bash
+# Poster: automode.d/system/10-issues
+# Story: POSTER-ISSUES (%POSTER-ISSUES)
+#
+# Posts `issue_opened` when this repo has open issues to work.
+#
+#   10-issues --once     check now, post if there are issues, exit  (default)
+#   10-issues --watch    the same, re-run on every change to issues/
+#
+# DELETED, not reimplemented: .automode/10-issues-sig. Its own comment explained
+# why it existed -- "_automode_relax() spawns a FRESH process every time IDLE
+# computes touch_relax, so without a signature an issue nobody has acted on gets
+# re-announced every relax cycle." That is a real problem and it is no longer
+# this file's. The action gauntlet compares issues.sig against seen_issues and
+# shows a given nag once per pass, so a poster that also deduped would be a
+# second copy of a rule that only works if there is exactly one. The pre-check /
+# watch-loop split goes for the same reason as everywhere else: a signal posted
+# before anyone waits is the ordinary case.
+#
+# TWO DOMAIN LESSONS KEPT, both encoded in one find:
+#   -size +0c   a zero-byte file is a half-written issue, not an open one
+#   -maxdepth 1 archived subdirectories are not an inbox that never empties
+
+set -uo pipefail
+
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/post.sh"
+
+[ -d issues ] || exit 0
+
+automode_poster_message() {
+    local list count
+    list="$(find issues -maxdepth 1 -name '*.md' -size +0c 2>/dev/null | sort)"
+    [ -n "$list" ] || return 1
+    count="$(printf '%s\n' "$list" | grep -c '^')"
+    # AFFORDANCE RULE: say what can be done about it, not only that it is true.
+    printf 'Issues inbox: %s open issue(s). Run: Bash(ls issues/*.md)' "$count"
+}
+
+automode_post_main "${1:---once}" issue_opened issues

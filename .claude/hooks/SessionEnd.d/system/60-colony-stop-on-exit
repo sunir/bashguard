@@ -1,0 +1,34 @@
+#!/bin/bash
+# Plugin: colony-stop-on-exit (SessionEnd)
+# Story: COLONY-DAEMON-MODE (SessionEnd wiring, 2026-07-16)
+#
+# WHY: colony daemon's supervisor loop (cli/src/Colony.py _daemon_supervise)
+#      only skips auto-recycle when it finds an explicit .colony.stop
+#      marker. Nothing wrote that marker on a normal user-initiated /exit,
+#      so every ordinary session end looked "unclean" to the daemon and
+#      got recycled with a false "did you crash?" diagnosis - a colony-wide
+#      incident (Spiral bug report, 2026-07-16).
+#
+# WHAT: On SessionEnd with reason == "prompt_input_exit" (the user
+#       explicitly exited), touch .colony.stop in the repo root -- the
+#       same marker `colony stop <repo>` itself writes and the daemon/
+#       launcher already poll for.
+#
+# WHAT THIS DOES NOT FIX: a SessionEnd hook that gets CANCELLED by the
+# harness tearing the process down externally never runs at all, so this
+# can't help that case -- that's bounded on the daemon side instead
+# (cli commit 9484bc3: cap + backoff + alert on repeated unclean exits).
+#
+# EXIT: Always 0. Best-effort, never blocks session end.
+
+INPUT="${INPUT:-$(cat)}"
+
+REASON=$(printf '%s' "$INPUT" | jq -r '.reason // empty' 2>/dev/null)
+CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+[[ -z "$CWD" ]] && CWD="$PWD"
+
+if [[ "$REASON" == "prompt_input_exit" ]]; then
+    touch "$CWD/.colony.stop" 2>/dev/null
+fi
+
+exit 0

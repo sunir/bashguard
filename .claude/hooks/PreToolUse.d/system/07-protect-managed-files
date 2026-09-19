@@ -1,0 +1,87 @@
+#!/bin/bash
+# Plugin: protect-managed-files (PreToolUse)
+# Story: read-only managed files + PreToolUse block for .claude edits
+#
+# PURPOSE: Block write/edit attempts targeting system-managed files in .claude/.
+#   These files are owned by ~/source/colony/system and synced by system-sync.
+#   Edits must go to the system repo — local edits are overwritten on next Stop.
+#
+# MANAGED PATHS (read-only, synced from system):
+#   .claude/hooks/*.d/system/*   — system policy plugins
+#   .claude/hooks/lib/*          — hook framework library
+#   .claude/hooks/Stop           — dispatcher
+#   .claude/hooks/PreToolUse     — dispatcher
+#   .claude/hooks/UserPromptSubmit — dispatcher
+#   .claude/commands/*           — slash command templates
+#   .claude/skills/*             — system skill files
+#   rules/Stop/*                 — lifecycle rules
+#   rules/UserPromptSubmit/*     — lifecycle rules
+#   rules/SessionStart/*         — lifecycle rules
+#
+# PROTOCOL: BLOCKING on managed file writes. exit 2 + stdout reason.
+# FAIL-OPEN: Missing jq, unexpected input → exit 0.
+
+INPUT=$(cat)
+
+# Only intercept write/edit tools
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
+case "$TOOL_NAME" in
+    Edit|Write|MultiEdit) ;;
+    *) exit 0 ;;
+esac
+
+# Extract target file path
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+[[ -z "$FILE_PATH" ]] && exit 0
+
+# Locate repo root (plugin lives at .claude/hooks/PreToolUse.d/system/)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+
+# Resolve file path to absolute
+if [[ "$FILE_PATH" != /* ]]; then
+    FILE_PATH="$(cd "${TOOL_INPUT_CWD:-$REPO_ROOT}" && realpath "$FILE_PATH" 2>/dev/null || echo "$REPO_ROOT/$FILE_PATH")"
+fi
+
+# Normalise: strip repo root prefix for pattern matching
+REL="${FILE_PATH#$REPO_ROOT/}"
+
+# Check if path matches a managed pattern
+is_managed() {
+    local p="$1"
+    # Dispatchers
+    [[ "$p" == .claude/hooks/Stop ]] && return 0
+    [[ "$p" == .claude/hooks/PreToolUse ]] && return 0
+    [[ "$p" == .claude/hooks/UserPromptSubmit ]] && return 0
+    [[ "$p" == .claude/hooks/PostToolUse ]] && return 0
+    [[ "$p" == .claude/hooks/SubagentStop ]] && return 0
+    [[ "$p" == .claude/hooks/SubagentStart ]] && return 0
+    [[ "$p" == .claude/hooks/SessionStart ]] && return 0
+    [[ "$p" == .claude/hooks/PreCompact ]] && return 0
+    # System plugin dirs
+    [[ "$p" == .claude/hooks/*.d/system/* ]] && return 0
+    [[ "$p" == .claude/hooks/lib/* ]] && return 0
+    # Commands and skills (system-synced)
+    [[ "$p" == .claude/commands/* ]] && return 0
+    [[ "$p" == .claude/skills/* ]] && return 0
+    # Lifecycle rules
+    [[ "$p" == rules/Stop/* ]] && return 0
+    [[ "$p" == rules/UserPromptSubmit/* ]] && return 0
+    [[ "$p" == rules/SessionStart/* ]] && return 0
+    return 1
+}
+
+if is_managed "$REL"; then
+    SYSTEM_REPO="$(cd "$REPO_ROOT/../system" && pwd -P 2>/dev/null || echo "~/source/colony/system")"
+    echo "BLOCKED: $REL is a system-managed file (read-only)."
+    echo ""
+    echo "These files are owned by the system repo and overwritten on every Stop hook."
+    echo "Your edit would be lost. Make the change in the system repo instead:"
+    echo ""
+    echo "  $SYSTEM_REPO"
+    echo ""
+    echo "Then commit and run cupdate to propagate to all repos."
+    exit 2
+fi
+
+exit 0

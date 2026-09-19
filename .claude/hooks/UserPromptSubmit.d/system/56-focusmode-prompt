@@ -1,0 +1,85 @@
+#!/bin/bash
+# Plugin: focusmode-prompt (UserPromptSubmit)
+# Story: focusmode-fsm
+#
+# PURPOSE: Inject focusmode state + exit condition instructions before each response.
+#   When focusmode is active, Claude always knows what state it's in and what
+#   it must do to advance to the next state.
+#
+# PROTOCOL: UserPromptSubmit informational. Output to stdout (injected into prompt).
+#   Exit 0 always. Never blocks.
+# FAIL-OPEN: Missing .focusmode → exit 0.
+
+INPUT=$(cat)
+
+FOCUSMODE_FILE="${FOCUSMODE_FILE:-.focusmode}"
+
+# No .focusmode or empty → focusmode off → nothing to inject
+[[ ! -f "$FOCUSMODE_FILE" ]] || [[ ! -s "$FOCUSMODE_FILE" ]] && exit 0
+
+STATE="$(cat "$FOCUSMODE_FILE" 2>/dev/null | tr -d '[:space:]')"
+[[ -z "$STATE" || "$STATE" == "IDLE" ]] && exit 0
+
+# Describe what to do in each state
+case "$STATE" in
+    TAKE)
+        EXIT_COND="Claim a todo: 'todo take <id>' (Bash), or TaskList + TaskUpdate (status→in_progress)"
+        WHAT_TO_DO="Run: todo avail → 'todo <id> take' → focusmode next (or TaskList → TaskUpdate if using harness tasks)"
+        ;;
+    BRANCH)
+        EXIT_COND="Create a feature branch (must be off main/master)"
+        WHAT_TO_DO="Run: git checkout -b <branch-name> → focusmode next"
+        ;;
+    TEST)
+        EXIT_COND="Write failing tests (red phase — tests MUST fail before writing code)"
+        WHAT_TO_DO="Write test files → run tests to confirm FAIL → focusmode next"
+        ;;
+    CODE)
+        EXIT_COND="Make tests pass (green phase)"
+        WHAT_TO_DO="Write code → run tests to confirm PASS → focusmode next"
+        ;;
+    DOC)
+        EXIT_COND="Update docs/stories/specs (at least one .md file modified)"
+        WHAT_TO_DO="Update stories/, specs/, docs/, or README → focusmode next"
+        ;;
+    COMPLETE)
+        EXIT_COND="Mark todos done (no in-progress items)"
+        WHAT_TO_DO="Run: TaskUpdate to mark task completed → focusmode next"
+        ;;
+    COMMIT)
+        EXIT_COND="Commit all changes (working tree clean)"
+        WHAT_TO_DO="Run: git add <files> && git commit -m 'message' → focusmode next"
+        ;;
+    MERGE)
+        EXIT_COND="Merge to main and clean up branch"
+        WHAT_TO_DO="Run: git checkout main && git merge <branch> && git branch -d <branch> → focusmode next"
+        ;;
+    *)
+        EXIT_COND="Unknown state"
+        WHAT_TO_DO="Run: focusmode state"
+        ;;
+esac
+
+# Run probe for readiness check (quick, non-blocking)
+PROBE_RESULT=""
+if command -v focusmode-probe >/dev/null 2>&1; then
+    PROBE_OUT="$(focusmode-probe "$STATE" 2>/dev/null)"
+    PROBE_EC=$?
+    case $PROBE_EC in
+        0) PROBE_RESULT="✓ READY — run: focusmode next" ;;
+        1) PROBE_RESULT="✗ NOT READY — exit condition not met" ;;
+        2) PROBE_RESULT="? INCONCLUSIVE — check manually" ;;
+    esac
+fi
+
+echo "<colony:workflow>"
+echo "<!-- Current session workflow state — not a user message -->"
+echo "━━━ FOCUSMODE:$STATE ━━━"
+echo "Exit condition: $EXIT_COND"
+echo "What to do:     $WHAT_TO_DO"
+[[ -n "$PROBE_RESULT" ]] && echo "Probe:          $PROBE_RESULT"
+echo "Escape:         focusmode escape \"<reason>\" (use sparingly)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "</colony:workflow>"
+
+exit 0

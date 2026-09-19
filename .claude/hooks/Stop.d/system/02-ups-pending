@@ -1,0 +1,182 @@
+#!/bin/bash
+# Plugin: ups-pending (Stop)
+# Story: SENSOR-UPS-PENDING, UPS-PENDING-NET, UPS-NET-BALANCE, STOP-HOOK-STRIP-AUTOMODE
+#
+# PURPOSE: If a genuinely queued user message (UserPromptSubmit) is sitting
+#   unconsumed in this session's transcript, let the stop happen cleanly
+#   (next_turn=stop, no message) instead of blocking. BLOCKING here would be
+#   wrong: an exit-2 continue injects a synthetic "keep going" turn that
+#   preempts the harness's own queue-delivery mechanism from ever surfacing
+#   the real queued message. Sunir, restoring this after STOP-HOOK-STRIP-
+#   AUTOMODE removed it along with automode-controller: "the ups_pending is
+#   valuable from a UX point of view."
+#
+# Runs first (priority 02) and requests next_turn=stop when pending, which
+# short-circuits every later plugin (stop_collect_plugins stops on the first
+# next_turn=stop) -- same effect as the pre-plugin gate this replaces.
+#
+# ALGORITHM (ported verbatim from the deleted lib/stop/ups.sh /
+# automode/sensors/ups-pending.sh -- both implemented this independently and
+# it matters, do not simplify): two-pass over the transcript JSONL --
+#   net += 1 per queue-operation enqueue (excluding <task-notification>,
+#          excluding entries older than 1h relative to the transcript's own
+#          latest timestamp, not wall-clock "now")
+#   net -= 1 per queue-operation dequeue/remove, and per genuine "type":"user"
+#          message (not a tool_result) once net > 0 -- production does not
+#          always emit an explicit dequeue record when a queued message is
+#          actually delivered, but a real user-authored entry afterward IS
+#          proof of delivery.
+#   pending = net > 0
+# Fixes a real incident: "my ups was sitting there not interrupting the
+# stop" -- a naive "after the last assistant timestamp" cutoff missed
+# messages enqueued partway through a long multi-tool-call turn.
+
+INPUT="$(cat 2>/dev/null)"
+REPO_ROOT="${REPO_ROOT:-.}"
+
+resolve_transcript_path() {
+    local path
+    path="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
+    if [[ -n "$path" && -f "$path" ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+
+    local sid="${SESSION_ID:-}"
+    [[ -z "$sid" ]] && sid="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+    [[ -n "$sid" ]] || return 1
+
+    local escaped_cwd
+    escaped_cwd="$(pwd | sed 's|/|-|g; s|_|-|g')"
+    path="${HOME:-/var/db/ai/claude}/.claude/projects/${escaped_cwd}/${sid}.jsonl"
+    if [[ -f "$path" ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+
+    local codex
+    codex="$(find "${HOME:-/var/db/ai/claude}/.codex/sessions" -type f -name "*${sid}.jsonl" 2>/dev/null | sort | tail -1)"
+    [[ -n "$codex" ]] || return 1
+    printf '%s\n' "$codex"
+}
+
+transcript_path="$(resolve_transcript_path)" || exit 0
+[[ -f "$transcript_path" ]] || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+
+_pyerr="$(mktemp)"
+python3 - "$transcript_path" 2>"$_pyerr" <<'PYEOF'
+import json
+import sys
+from datetime import datetime, timedelta
+
+path = sys.argv[1]
+STALE_WINDOW = timedelta(hours=1)
+
+
+def _parse_ts(ts):
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _is_genuine_user_message(d):
+    if d.get("type") != "user":
+        return False
+    message = d.get("message", {})
+    content = message.get("content", "") if isinstance(message, dict) else ""
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        if not content:
+            return False
+        return not all(
+            isinstance(b, dict) and b.get("type") == "tool_result"
+            for b in content
+        )
+    return False
+
+
+try:
+    entries = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+
+    if not entries:
+        sys.exit(1)
+
+    timestamps = [d.get("timestamp", "") for d in entries if d.get("timestamp")]
+    latest_dt = _parse_ts(max(timestamps)) if timestamps else None
+
+    def _is_recent(ts):
+        if latest_dt is None:
+            return True  # fail open: can't establish a window, don't exclude
+        dt = _parse_ts(ts)
+        if dt is None:
+            return True
+        return (latest_dt - dt) <= STALE_WINDOW
+
+    net = 0
+    for d in entries:
+        ts = d.get("timestamp", "")
+        if d.get("type") == "queue-operation":
+            if str(d.get("content", "")).startswith("<task-notification>"):
+                continue
+            op = d.get("operation")
+            if op == "enqueue":
+                if _is_recent(ts):
+                    net += 1
+            elif op in ("dequeue", "remove"):
+                net = max(0, net - 1)
+            elif op == "popAll":
+                # Story: UPS-PENDING-POPALL-GAP -- popAll is a genuine,
+                # harness-native queue-operation (confirmed in real
+                # transcripts colony-wide, e.g. Brook/Vector/Quantum
+                # sessions) meaning the ENTIRE queue was drained/delivered
+                # at once -- not a per-item dequeue. Before this, popAll
+                # matched neither "enqueue" nor "dequeue"/"remove" and was
+                # silently ignored, leaving net stuck positive from an
+                # already-delivered message. Live incident: "you have
+                # unread msg" enqueued, popAll'd 3 seconds later (genuinely
+                # delivered), but net stayed at 1 for the next 5+ minutes
+                # (no genuine "type":"user" text message in between --
+                # only tool_results, correctly excluded) until the next
+                # Stop cycle misread the stale net>0 as "still pending"
+                # and short-circuited to next_turn=stop on a message that
+                # was long since delivered.
+                net = 0
+        elif net > 0 and _is_genuine_user_message(d):
+            net -= 1
+
+    sys.exit(0 if net > 0 else 1)
+except OSError:
+    sys.exit(1)
+PYEOF
+_ec=$?
+
+# A genuine crash (uncaught exception) also exits nonzero but writes a
+# traceback to stderr, unlike either designed exit path -- distinguish so a
+# crash reads as "unknown, don't claim pending" rather than silently as
+# "not pending".
+if [[ -s "$_pyerr" ]]; then
+    rm -f "$_pyerr"
+    exit 0
+fi
+rm -f "$_pyerr"
+
+[[ $_ec -eq 0 ]] || exit 0
+
+jq -n '{
+    source: "02-ups-pending",
+    status: "ok",
+    next_turn: "stop"
+}'
+exit 0

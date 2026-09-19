@@ -1,0 +1,9 @@
+#!/bin/bash
+# Plugin: automode.message.d/10-msg
+# Shows unread messages on wake. The automode.d/10-msg watcher signals
+# any .msg change via a generic "[10-msg] New mail" reason, so we match
+# on the plugin name and surface whatever's unread.
+command -v msg > /dev/null 2>&1 || exit 1
+echo "$1" | grep -q '10-msg' || exit 1
+
+msg list unread as text 2>/dev/null | head -10

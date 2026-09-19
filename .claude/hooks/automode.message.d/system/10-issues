@@ -1,0 +1,18 @@
+#!/bin/bash
+# Plugin: automode.message.d/10-issues
+# Reports issue counts when automode wakes.
+#
+# CONTRACT (automode.message.d message plugin)
+# - Called once per wakeup with $1 = raw wakeup reason string
+# - stdin: none
+# - stdout: message text to show Claude (empty = nothing to add)
+# - exit 0 always; exit 1 only if required tool is unavailable
+# - All plugins contribute; output is concatenated; stop always blocks
+[ -d issues ] || exit 0
+for f in issues/*.jsonl; do
+    [ -f "$f" ] || continue
+    count=$(wc -l < "$f" | tr -d ' ')
+    [ "$count" -gt 0 ] || continue
+    cat=$(basename "$f" .jsonl)
+    echo "\U0001f4cb $count issue(s) in $cat \u2014 check issues/$cat.jsonl"
+done

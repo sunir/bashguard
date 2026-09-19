@@ -1,0 +1,52 @@
+#!/bin/bash
+# Plugin: automode (Stop) — system-wide
+#
+# Story: STOP-AUTOMODE-HFSM-INTEGRATION
+#
+# PURPOSE: Bridge the Stop dispatcher to automode's HFSM (`automode run`).
+#   Adapted from automode's own reference (automode/.claude/hooks/Stop.d/
+#   local/99-automode) for colony-wide propagation: invokes plain
+#   `automode` (PATH-resolved via common.sh's CLAUDE_BIN, same as every
+#   other system plugin calling msg/todo/colony) instead of $ROOT/bin/
+#   automode, which only exists inside automode's own repo checkout.
+#
+# CONTRACT (lib/stop/plugins.sh): stdout must be a single JSON object with
+#   next_turn ("stop"|"continue"|"wait") and messages ([{body:...}] or
+#   strings). `automode run`'s own stdout is plain text (bin/automode's
+#   render_response prints response["stdout"] verbatim, not JSON) -- this
+#   plugin repackages it, it does not forward it unmodified.
+#
+# FAIL-OPEN: `automode` not on PATH (not every repo has it installed) ->
+#   no output, exit 0. Never block Stop colony-wide over a missing binary.
+
+INPUT=$(cat)
+
+command -v automode >/dev/null 2>&1 || exit 0
+
+_stdout_file="$(mktemp "${TMPDIR:-/tmp}/automode-stdout.XXXXXX")" || exit 0
+_stderr_file="$(mktemp "${TMPDIR:-/tmp}/automode-stderr.XXXXXX")" || {
+    rm -f "$_stdout_file"
+    exit 0
+}
+
+printf '%s' "$INPUT" | automode run >"$_stdout_file" 2>"$_stderr_file"
+_exit=$?
+_stdout="$(cat "$_stdout_file" 2>/dev/null)"
+_stderr="$(cat "$_stderr_file" 2>/dev/null)"
+rm -f "$_stdout_file" "$_stderr_file"
+
+if [[ "$_exit" -eq 0 ]]; then
+    jq -nc '{next_turn:"stop", messages:[]}'
+    exit 0
+fi
+
+_body="$_stdout"
+if [[ -n "$_stderr" ]]; then
+    _body="${_body:+$_body$'\n'}$_stderr"
+fi
+if [[ -z "$_body" ]]; then
+    _body="automode failed without a diagnostic (exit $_exit)"
+fi
+
+jq -nc --arg body "$_body" '{next_turn:"continue", messages:[{body:$body}]}'
+exit 0

@@ -1,0 +1,27 @@
+#!/bin/bash
+# Plugin: agent-sentinel (SubagentStart)
+#
+# Writes .claude/agents/<agent_id>.active when a subagent starts.
+# 30-check-git reads these to suppress branch/uncommitted warnings
+# while subagents are actively working in the repo.
+# SubagentStop.d/system/10-agent-sentinel cleans up on completion.
+
+INPUT=$(cat)
+command -v jq >/dev/null 2>&1 || exit 0
+
+AGENT_ID="$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null)"
+[[ -n "$AGENT_ID" ]] || exit 0
+
+SENTINEL_DIR=".claude/agents"
+mkdir -p "$SENTINEL_DIR"
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')"
+
+jq -n \
+    --arg agent_id "$AGENT_ID" \
+    --arg branch "$BRANCH" \
+    --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{"agent_id":$agent_id,"branch":$branch,"started_at":$started_at}' \
+    > "$SENTINEL_DIR/$AGENT_ID.active" 2>/dev/null
+
+exit 0

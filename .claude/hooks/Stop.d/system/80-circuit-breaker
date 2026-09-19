@@ -1,0 +1,465 @@
+#!/bin/bash
+# Plugin: circuit-breaker (Stop)
+#
+# PURPOSE: Detect degradation signals colony-wide and escalate to the_management
+#   before silent failures compound. Three signal categories:
+#
+#   1. Hook degradation — any plugin with 5+ consecutive non-zero exits in Stop.log
+#   2. Missing binaries — critical path binary that was previously present is gone
+#   3. Stall detection — taken todos / stale msg inboxes (Sysop only)
+#      NOTE: Story-file stall check intentionally omitted. Mere existence of a
+#      .md file with no recent commits is not a meaningful signal — specs and
+#      stories are design docs, not active work items. Stall detection is scoped
+#      to .todo.json items in "taken" state and to stale msg inboxes only.
+#
+# WHY: Colony automation depends on hook pipelines and shared binaries. A single
+#   failed plugin silently poisons every Stop event. Human attention is needed
+#   early, not after the session is hopelessly confused.
+#
+# FAIL-OPEN: exits 0 always — never blocks stop. Alerts are advisory only.
+# STATE: .automode/circuit-breaker.json — signals, cooldowns, binary seen-set.
+# COOLDOWN: 24h between repeat alerts for the same signal key.
+# BASH: 3.2 compatible — no ${var,,}, no declare -A.
+
+INPUT=$(cat)
+
+# ─── Guards ───────────────────────────────────────────────────────────────────
+
+# The breaker fires alerts via `msg` and parses state via `jq`. Non-interactive
+# / service-user contexts often lack $HOME/bin on PATH (where colony tools like
+# msg live), which silently exit-0'd the whole breaker — and a SAFETY device
+# that fails quiet makes "never tripped" indistinguishable from "never ran".
+# Prepend the HOME-relative install dirs, then fail LOUD. bash-3.2 safe.
+# Story: CHECK-MSGS-PATH-GUARD (flow %83).
+case ":$PATH:" in *":$HOME/bin:"*) ;; *) [ -d "$HOME/bin" ] && PATH="$HOME/bin:$PATH" ;; esac
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) [ -d "$HOME/.local/bin" ] && PATH="$HOME/.local/bin:$PATH" ;; esac
+
+if ! command -v msg >/dev/null 2>&1; then
+    echo "80-circuit-breaker: 'msg' not found on PATH (checked \$HOME/bin, \$HOME/.local/bin) — cannot fire alerts, breaker SKIPPED. Fix PATH or reinstall msg." >&2
+    exit 0
+fi
+if ! command -v jq >/dev/null 2>&1; then
+    echo "80-circuit-breaker: 'jq' not found on PATH — cannot parse state, breaker SKIPPED." >&2
+    exit 0
+fi
+if [ ! -d ".automode" ]; then
+    exit 0
+fi
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+
+STATE_FILE=".automode/circuit-breaker.json"
+HOOK_DEGRADE_THRESHOLD=5
+STALL_TODO_HOURS=24
+STALL_MSG_HOURS=12
+COOLDOWN_SECONDS=86400  # 24h
+# Story: CIRCUIT-BREAKER-STALE. A genuinely active session's Stop.log
+# gets a new line roughly every agent turn; 1h of total silence is a strong
+# signal the execution context that produced it is gone (a real incident:
+# a transient the_management-as-uid-501 context left a stale Stop.log that
+# every OTHER repo's own circuit breaker kept independently rediscovering
+# as "fresh" degradation, forever, because .automode/circuit-breaker.json
+# state is per-repo -- N observers each saw it for the first time).
+HOOK_LOG_STALE_SECONDS=3600  # 1h
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOKS_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
+COLONY_ROOT="${COLONY_ROOT:-$(cd "$REPO_ROOT/.." && pwd)}"
+
+NOW=$(python3 -c "import time; print(int(time.time()))")
+
+# ─── Central Python engine ────────────────────────────────────────────────────
+# All logic is handled by a single Python process that reads state, runs all
+# checks, fires alerts, and writes updated state. This avoids subshell/pipe
+# state-propagation issues that plague pure-bash approaches.
+#
+# Story: CIRCUIT-BREAKER-HEREDOC-BACKTICK -- the heredoc below is
+# deliberately UNQUOTED (<<PYEOF, not <<'PYEOF') so bash substitutes
+# ${HOOK_DEGRADE_THRESHOLD} etc into the Python source before python3 ever
+# sees it. That means bash ALSO processes backticks and $(...) anywhere in
+# this entire Python block, including inside comments and docstrings --
+# `name` (markdown-style backtick-quoting, used freely elsewhere in this
+# codebase) silently becomes a command substitution here. Live incident:
+# a docstring reading "per-repo `should_alert` only knows..." made bash
+# try to run `should_alert` as a command ("command not found"), breaking
+# every check below it on every single Stop cycle, fail-open and silent.
+# Never use backtick-quoting for code references anywhere in this heredoc
+# -- plain text or single-quotes only.
+COLONY_ROOT_ESC="$COLONY_ROOT"
+CWD_BASENAME="$(basename "$PWD")"
+
+python3 - <<PYEOF
+import json, os, re, subprocess, sys, time
+from datetime import datetime, timezone
+
+# ── Config ──────────────────────────────────────────────────────────────────
+STATE_FILE      = ".automode/circuit-breaker.json"
+# Story: CIRCUIT-BREAKER-FANOUT -- alert keys for cross-repo signals (hook
+# degradation) embed the SUBJECT repo (from the log path being scanned),
+# not the repo currently executing this plugin. STATE_FILE above is
+# per-repo (cwd-relative), so repo A discovering repo B's degraded log
+# records the cooldown in A's OWN state file -- repo B's later Stop cycle,
+# scanning the same wide /tmp/*/*/Stop.log glob, finds no record of it and
+# alerts again independently. the_management: 608 messages in ~22h from
+# ~2 real events, and separately 4 identical "hook degradation" alerts in
+# 3 minutes from 4 different repos for one shared defect. SHARED_STATE_FILE
+# is genuinely cross-repo (not per-repo, not per-uid-scoped to any single
+# .automode/) so whichever repo's Stop cycle happens to fire first "claims"
+# the alert and every other repo's later discovery of the same signal sees
+# it was already sent and skips.
+SHARED_STATE_FILE = os.environ.get(
+    "CIRCUIT_BREAKER_SHARED_STATE",
+    os.path.join("/tmp", str(os.getuid()), "circuit-breaker-shared.json"))
+HOOK_THRESH     = ${HOOK_DEGRADE_THRESHOLD}
+TODO_HOURS      = ${STALL_TODO_HOURS}
+MSG_HOURS       = ${STALL_MSG_HOURS}
+COOLDOWN        = ${COOLDOWN_SECONDS}
+HOOK_LOG_STALE  = ${HOOK_LOG_STALE_SECONDS}
+COLONY_ROOT     = "${COLONY_ROOT_ESC}"
+NOW             = ${NOW}
+CWD_BASENAME    = "${CWD_BASENAME}"
+
+PRIMARY_BINS    = ["msg", "automode", "todo", "colony", "transcript"]
+SECONDARY_BINS  = ["pscolony", "rag"]
+# Plugins excluded from hook degradation alerts — non-zero exit is by design.
+# These are all guard/blocker plugins whose exit 2 means "don't stop yet",
+# not a failure. Treating them as degradation produces only false positives.
+EXCLUDED_PLUGINS = {
+    "15-focusmode",
+    "20-check-msgs",
+    "30-check-git",
+    "40-permissions-check",
+    "45-idle-pressure",
+    "50-todo",
+    "55-evidence-gate",
+}
+
+# ── State I/O ───────────────────────────────────────────────────────────────
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            d = json.load(f)
+        if not isinstance(d, dict):
+            d = {}
+    except Exception:
+        d = {}
+    d.setdefault("signals", {})
+    d.setdefault("binaries_seen", [])
+    return d
+
+def save_state(state):
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
+
+# Story: CIRCUIT-BREAKER-FANOUT -- see SHARED_STATE_FILE comment above.
+# Deliberately minimal: {key: last_alerted_iso}, no other per-repo
+# bookkeeping (first_seen/resolved stay in the per-repo STATE_FILE, which
+# is still authoritative for that). A stale/racy read here is harmless --
+# worst case two repos' Stop cycles overlap within the same few seconds
+# and both alert once each, which is a bounded, tiny fan-out compared to
+# every repo on the host independently rediscovering the same signal over
+# the next hour. Atomic write (temp+rename) so a crash mid-write never
+# corrupts it for the next reader.
+def load_shared_state():
+    try:
+        with open(SHARED_STATE_FILE) as f:
+            d = json.load(f)
+        if not isinstance(d, dict):
+            d = {}
+    except Exception:
+        d = {}
+    return d
+
+def save_shared_state(shared):
+    try:
+        os.makedirs(os.path.dirname(SHARED_STATE_FILE), exist_ok=True)
+        tmp = SHARED_STATE_FILE + ".tmp.%d" % os.getpid()
+        with open(tmp, "w") as f:
+            json.dump(shared, f, indent=2)
+        os.replace(tmp, SHARED_STATE_FILE)
+    except Exception:
+        pass
+
+def shared_cooldown_active(key):
+    """True if ANY repo already alerted on this exact key within COOLDOWN."""
+    last = load_shared_state().get(key, "")
+    if not last:
+        return False
+    try:
+        dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+        return NOW - int(dt.timestamp()) < COOLDOWN
+    except Exception:
+        return False
+
+def record_shared_alert(key):
+    shared = load_shared_state()
+    shared[key] = now_iso()
+    save_shared_state(shared)
+
+def now_iso():
+    return datetime.fromtimestamp(NOW, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def human_duration(first_iso):
+    try:
+        dt = datetime.fromisoformat(first_iso.replace("Z", "+00:00"))
+        delta = NOW - int(dt.timestamp())
+        h, m = delta // 3600, (delta % 3600) // 60
+        if h >= 48:
+            return "%dd %dh" % (h // 24, h % 24)
+        elif h > 0:
+            return "%dh %dm" % (h, m)
+        else:
+            return "%dm" % m
+    except Exception:
+        return "unknown"
+
+# ── Signal operations ────────────────────────────────────────────────────────
+def should_alert(state, key):
+    """Return True if we should fire an alert for this signal key."""
+    sig = state["signals"].get(key, {})
+    if sig.get("resolved", False):
+        return False
+    last = sig.get("last_alerted", "")
+    if last:
+        try:
+            dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+            if NOW - int(dt.timestamp()) < COOLDOWN:
+                return False
+        except Exception:
+            pass
+    return True
+
+def record_signal(state, key):
+    """Update signal metadata on fire."""
+    signals = state["signals"]
+    sig = signals.get(key, {})
+    if not sig.get("first_seen"):
+        sig["first_seen"] = now_iso()
+    sig["last_alerted"] = now_iso()
+    sig["resolved"] = False
+    signals[key] = sig
+
+def resolve_signal(state, key):
+    """Mark signal resolved (stop alerting until re-fire)."""
+    if key in state["signals"]:
+        state["signals"][key]["resolved"] = True
+
+def fire_alert(state, key, alert_type, detail, extra=""):
+    """Check cooldown, record, send msg. Modifies state in-place.
+    Returns True if alert was sent.
+
+    Story: CIRCUIT-BREAKER-FANOUT -- per-repo should_alert only knows
+    what THIS repo's own Stop cycles have alerted before. A key observed
+    from another repo's log (hook degradation) or a colony-wide shared
+    fact (a missing binary every repo's own Stop hook checks
+    independently) can be legitimately new to THIS repo's state while
+    every other repo's Stop hook is about to independently rediscover
+    the exact same thing. The shared-state check below is the actual
+    fix for that fan-out; should_alert above is unchanged and still
+    governs this repo's own local re-alert cadence.
+    """
+    if not should_alert(state, key):
+        return False
+    record_signal(state, key)
+    if shared_cooldown_active(key):
+        return False
+    first_seen = state["signals"][key].get("first_seen", now_iso())
+    duration = human_duration(first_seen)
+    subject = "Circuit breaker: %s -- %s" % (alert_type, detail)
+    body = "First seen: %s. Duration: %s. Signal: %s." % (first_seen, duration, key)
+    if extra:
+        body += " " + extra
+    full = "%s -- %s" % (subject, body)
+    try:
+        subprocess.run(["msg", "send", "the_management", full],
+                       capture_output=True, timeout=10)
+    except Exception:
+        pass
+    record_shared_alert(key)
+    return True
+
+# ── Dark repos registry ──────────────────────────────────────────────────────
+def load_dark_repos():
+    """Repos with no active agent — skip stall alerts, skip hook alerts."""
+    dark = set()
+    cfg = os.path.join(COLONY_ROOT, "system", "config", "dark-repos.txt")
+    try:
+        for line in open(cfg):
+            line = line.split("#", 1)[0].strip()
+            if line:
+                dark.add(line)
+    except Exception:
+        pass
+    return dark
+
+DARK_REPOS = load_dark_repos()
+
+# ── Signal 1: Hook degradation ───────────────────────────────────────────────
+# Story: CIRCUIT-BREAKER-DETECTION-SIGNALS
+def check_hook_degradation(state):
+    import glob
+    pat = re.compile(r"dispatcher plugin=(\S+) exit=(\d+)")
+    test_session_pat = re.compile(r"session_id=test-session")
+    for log_file in glob.glob("/tmp/*/*/Stop.log"):
+        repo = os.path.basename(os.path.dirname(log_file))
+        if repo in DARK_REPOS:
+            continue
+        # Liveness check on the SIGNAL SOURCE, not just its content. A log
+        # that hasn't been written to in HOOK_LOG_STALE_SECONDS means the
+        # execution context that produced it is gone -- its tail content
+        # is history, not a currently-degrading plugin. Resolve any
+        # already-armed keys for this repo (supervision-domain.md: "a
+        # stop-marker is a standing kill-order that OUTLIVES the decision
+        # that wrote it" -- a breaker record is the same class of event,
+        # not a state, and must be re-derived every check, not remembered).
+        try:
+            log_mtime = os.path.getmtime(log_file)
+        except OSError:
+            continue
+        if NOW - log_mtime > HOOK_LOG_STALE:
+            for existing_key in list(state["signals"].keys()):
+                if existing_key.startswith("hook:%s:" % repo):
+                    resolve_signal(state, existing_key)
+            continue
+        try:
+            lines = open(log_file).readlines()
+        except Exception:
+            continue
+        # Skip test-harness logs (session_id=test-session)
+        if any(test_session_pat.search(l) for l in lines):
+            continue
+
+        plugin_exits = {}
+        for line in lines:
+            m = pat.search(line)
+            if m:
+                plugin_exits.setdefault(m.group(1), []).append(int(m.group(2)))
+
+        for plugin, exits in plugin_exits.items():
+            if plugin in EXCLUDED_PLUGINS:
+                continue
+            # Count consecutive failure exits at tail.
+            # exit 2 = intentional block (colony hook convention) — not a failure.
+            # Only exit 1 or >2 indicates a genuine crash or unexpected error.
+            consecutive = 0
+            for e in reversed(exits):
+                if e != 0 and e != 2:
+                    consecutive += 1
+                else:
+                    break
+            key = "hook:%s:%s" % (repo, plugin)
+            if consecutive >= HOOK_THRESH:
+                fire_alert(state, key, "hook degradation",
+                           "%s/%s" % (repo, plugin),
+                           "%d+ consecutive non-zero exits." % HOOK_THRESH)
+            else:
+                resolve_signal(state, key)
+
+# ── Signal 2: Missing binaries ───────────────────────────────────────────────
+# Story: CIRCUIT-BREAKER-DETECTION-SIGNALS
+def check_binaries(state):
+    seen = set(state.get("binaries_seen", []))
+    newly_seen = set()
+
+    for b in PRIMARY_BINS + SECONDARY_BINS:
+        present = (subprocess.run(["which", b],
+                                  capture_output=True).returncode == 0)
+        if present:
+            newly_seen.add(b)
+            if b in PRIMARY_BINS:
+                resolve_signal(state, "binary:" + b)
+        elif b in PRIMARY_BINS and b in seen:
+            fire_alert(state, "binary:" + b, "missing binary", b,
+                       "Critical path binary was present; now missing.")
+
+    state["binaries_seen"] = sorted(seen | newly_seen)
+
+# ── Signal 3: Stall detection (Sysop only) ───────────────────────────────────
+# Story: CIRCUIT-BREAKER-DETECTION-SIGNALS — disabled at the call site below;
+# see that story for why (msg-inbox stall false-positived colony-wide).
+# Only todo-taken stalls and msg-inbox stalls. Story-file stall removed: mere
+# existence of an uncommitted spec/.md is not meaningful — see header comment.
+def check_stalls(state):
+    import glob as globmod
+
+    todo_thresh  = TODO_HOURS * 3600
+    msg_thresh   = MSG_HOURS * 3600
+
+    for repo_path in sorted(globmod.glob(os.path.join(COLONY_ROOT, "*") + "/")):
+        if not os.path.isdir(repo_path):
+            continue
+        repo_name = os.path.basename(os.path.normpath(repo_path))
+
+        # Only scan active colony members — repos without .automode/ are not
+        # under agent management; no stall to detect there.
+        if not os.path.isdir(os.path.join(repo_path, ".automode")):
+            continue
+
+        # ── 3a. Todo stall ──────────────────────────────────────────────────
+        # Detect taken todos where .todo.json mtime > 24h (nothing progressed).
+        todo_json = os.path.join(repo_path, ".todo.json")
+        if os.path.exists(todo_json):
+            try:
+                age = int(time.time() - os.stat(todo_json).st_mtime)
+                todos = json.load(open(todo_json)).get("todos", [])
+            except Exception:
+                age, todos = 0, []
+
+            for item in todos:
+                if item.get("status") != "taken":
+                    continue
+                content = str(item.get("content", ""))
+                notes = str(item.get("notes", ""))
+                if "snooze" in content.lower() or "snooze" in notes.lower():
+                    continue
+                item_id = str(item.get("id", "?"))
+                key = "stall:todo:%s:%s" % (repo_name, item_id)
+                if age > todo_thresh:
+                    fire_alert(state, key, "todo stall",
+                               "%s todo %%%s: %s" % (repo_name, item_id, content[:80]),
+                               "Item taken; .todo.json unchanged for %dh." % TODO_HOURS)
+                else:
+                    resolve_signal(state, key)
+
+        # ── 3b. Msg chain stall ─────────────────────────────────────────────
+        # Detect non-empty inbox that hasn't changed in 12h (agent not reading mail).
+        inbox = os.path.join(repo_path, ".msg", "inbox")
+        if os.path.exists(inbox):
+            try:
+                stat = os.stat(inbox)
+                inbox_size = stat.st_size
+                inbox_age = int(time.time() - stat.st_mtime)
+            except Exception:
+                inbox_size, inbox_age = 0, 0
+
+            if inbox_size > 0:
+                key = "stall:msg:%s" % repo_name
+                if inbox_age > msg_thresh:
+                    fire_alert(state, key, "msg stall",
+                               "%s inbox (%db, %dh stale)" % (
+                                   repo_name, inbox_size, inbox_age // 3600),
+                               "Inbox non-empty and unchanged for %dh." % MSG_HOURS)
+                else:
+                    resolve_signal(state, key)
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+state = load_state()
+
+check_hook_degradation(state)
+check_binaries(state)
+
+# Stall detection disabled: msg-inbox stall fired for every repo with an old inbox
+# (hundreds of repos with unread msgs that have no active agent). Signal redesign needed:
+# stall should be scoped to repos where an agent is actively assigned a todo in "taken"
+# state, crossed with a roster of active agents. Re-enable when that signal is defined.
+# if CWD_BASENAME == "Sysop":
+#     check_stalls(state)
+
+save_state(state)
+PYEOF
+
+exit 0
